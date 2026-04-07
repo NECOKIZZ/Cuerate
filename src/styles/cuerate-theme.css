@@ -1,0 +1,198 @@
+/* Cuerate Custom Theme Variables */
+:root {
+  /* Cuerate Colors */
+  --cuerate-blue: #1877F2;
+  --cuerate-indigo: #6F00FF;
+  --cuerate-bg: #000000;
+  --cuerate-surface: rgba(255, 255, 255, 0.035);
+  --cuerate-text-1: #f2f2f2;
+  --cuerate-text-2: #888888;
+  --cuerate-text-3: #444444;
+  --cuerate-indigo-glow: rgba(111, 0, 255, 0.32);
+  --cuerate-blue-glow: rgba(24, 119, 242, 0.28);
+  
+  /* Cuerate Border Radius */
+  --cuerate-r-sm: 12px;
+  --cuerate-r-md: 18px;
+  --cuerate-r-lg: 24px;
+  --cuerate-r-xl: 32px;
+  --cuerate-r-pill: 999px;
+  
+  /* Cuerate Fonts */
+  --cuerate-font-primary: 'Bricolage Grotesque', sans-serif;
+  --cuerate-font-accent: 'Inter', sans-serif;
+}
+
+/* Mobile-first optimizations */
+* {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+html {
+  /* Prevent pull-to-refresh and overscroll on mobile */
+  overscroll-behavior-y: contain;
+  /* Smooth scrolling */
+  -webkit-overflow-scrolling: touch;
+}
+
+body {
+  font-family: var(--cuerate-font-primary);
+  background: var(--cuerate-bg);
+  color: var(--cuerate-text-1);
+  /* Prevent text size adjustment on mobile */
+  -webkit-text-size-adjust: 100%;
+  -moz-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Use safe area for notched devices */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Utility Classes */
+.font-primary {
+  font-family: var(--cuerate-font-primary);
+}
+
+.font-accent {
+  font-family: var(--cuerate-font-accent);
+}
+
+.glass-surface {
+  background: var(--cuerate-surface);
+  backdrop-filter: blur(12px);
+}
+
+.glass-nav {
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(28px);
+}
+
+.indigo-glow {
+  box-shadow: 0 0 16px var(--cuerate-indigo-glow);
+}
+
+.blue-glow {
+  box-shadow: 0 0 16px var(--cuerate-blue-glow);
+}
+
+.card-top-edge {
+  position: relative;
+}
+
+.card-top-edge::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0.5px;
+  background: linear-gradient(90deg, transparent, rgba(111, 0, 255, 0.45), transparent);
+}
+
+.ambient-glow {
+  position: fixed;
+  top: -200px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, var(--cuerate-indigo-glow), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile-first responsive container */
+@media (max-width: 480px) {
+  .cuerate-container {
+    width: 100%;
+    min-height: 100dvh;
+  }
+}
+
+/* Extra small screens (320px - 360px) */
+@media (max-width: 360px) {
+  .cuerate-container {
+    width: 100%;
+    min-height: 100dvh;
+  }
+  
+  /* Reduce padding on very small screens */
+  body {
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+  .cuerate-container {
+    max-width: 430px;
+    margin: 0 auto;
+  }
+}
+
+@media (min-width: 769px) {
+  .cuerate-container {
+    width: 100%;
+    margin: 0 auto;
+  }
+}
+
+/* Desktop layout utilities */
+.desktop-sidebar {
+  display: none;
+}
+
+@media (min-width: 769px) {
+  .desktop-sidebar {
+    display: flex;
+  }
+  
+  .mobile-nav {
+    display: none;
+  }
+  
+  .desktop-main-content {
+    margin-left: 260px;
+    max-width: 1400px;
+  }
+}
+
+@media (max-width: 768px) {
+  .mobile-nav {
+    display: flex;
+  }
+}
+
+/* Masonry feed layout for mixed-height cards */
+.prompt-grid {
+  column-count: 1;
+  column-gap: 1rem;
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .prompt-grid {
+    column-count: 2;
+  }
+}
+
+@media (min-width: 1025px) {
+  .prompt-grid {
+    column-count: 3;
+  }
+}
+
+.prompt-masonry-item {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  margin-bottom: 1rem;
+}

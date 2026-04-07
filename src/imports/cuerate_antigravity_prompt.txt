@@ -1,0 +1,395 @@
+====================================================
+CUERATE — ANTIGRAVITY FOUNDING PROMPT
+====================================================
+Paste this entire document into Antigravity's Agent Manager.
+
+----------------------------------------------------
+PROJECT OVERVIEW
+----------------------------------------------------
+Build a full-stack mobile-first social media web app called Cuerate — a platform where AI video creators share their prompts alongside the video results they produced. Think Instagram × GitHub for AI video prompts. Creators post a prompt + video, the community scrolls, copies prompts they like, forks and remixes them, and follows creators whose style they love.
+
+The app is fully responsive and optimized for mobile. It should feel and look like a native iOS/Android app when opened on a phone.
+
+----------------------------------------------------
+TECH STACK
+----------------------------------------------------
+Frontend:     Next.js 14 (App Router) + Tailwind CSS + shadcn/ui
+Backend/DB:   Firebase (Firestore + Firebase Auth + Firebase Storage)
+AI Auto-Fill: Claude API (claude-sonnet-4-20250514) — called server-side via Next.js API route
+Deployment:   Google Cloud Run (via Antigravity native deploy)
+
+----------------------------------------------------
+DESIGN SYSTEM
+----------------------------------------------------
+Fonts:
+  Primary UI:     Bricolage Grotesque (weights 400, 500, 600, 700)
+  Accent/Technical (prompts, badges, labels, inputs): Inter (weights 400, 500, 600)
+  Load both from Google Fonts.
+
+Color Palette:
+  --blue:     #1877F2   (action color — play buttons, likes, logo accent)
+  --indigo:   #6F00FF   (identity color — selections, copy button, active nav, glows)
+  Background: #000000 (pure black, dominant)
+  Surface:    rgba(255,255,255,0.035) with backdrop-filter: blur(12px)
+  Text-1:     #f2f2f2 (primary text)
+  Text-2:     #888888 (secondary text)
+  Text-3:     #444444 (muted text)
+  Indigo glow: rgba(111,0,255,0.32)
+  Blue glow:   rgba(24,119,242,0.28)
+
+Border Radius (EVERYTHING must be rounded — no sharp edges anywhere):
+  --r-sm:   12px  (thumbnails, icons, small elements)
+  --r-md:   18px  (cards, fields, modals inner sections)
+  --r-lg:   24px  (prompt cards, collection tiles)
+  --r-xl:   32px  (modals, sheets, device shell)
+  --r-pill: 999px (ALL buttons, chips, badges, search bars, stats rows, follow pills)
+
+Effects:
+  - Ambient indigo radial glow at top of every screen (behind content, z-index: 0)
+  - Top-edge light line on every card: 0.5px gradient line from transparent → rgba(111,0,255,0.45) → transparent
+  - Bottom nav and top bar: backdrop-filter blur(28px), rgba(0,0,0,0.85) background
+  - Cards: glass effect with backdrop-filter blur(12px), rgba(255,255,255,0.035) background
+  - Active indigo elements: box-shadow 0 0 16px rgba(111,0,255,0.32)
+  - Active blue elements: box-shadow 0 0 16px rgba(24,119,242,0.28)
+  - NO sharp corners anywhere in the UI
+
+Responsiveness:
+  - Mobile (<480px): Full screen, 100dvh, no shell border radius, edge-to-edge
+  - Tablet (481–768px): Centered at 430px max-width
+  - Desktop (>768px): Show phone shell centered with screen navigation above it
+
+----------------------------------------------------
+FIREBASE DATA MODELS
+----------------------------------------------------
+
+USERS collection:
+  uid, handle, displayName, avatarUrl, bio, links{x, instagram, youtube, website},
+  primaryModels: string[] (e.g. ["Sora","Runway","Kling"]),
+  followers: number, following: number,
+  totalCopies: number, totalPrompts: number,
+  createdAt: timestamp
+
+PROMPTS collection:
+  id, authorUid, authorHandle, authorAvatar,
+  videoUrl (Firebase Storage URL),
+  thumbnailUrl (Firebase Storage URL),
+  promptText: string,
+  model: string (e.g. "Sora", "Runway", "Kling", "Pika", "Hailuo"),
+  styleTags: string[] (e.g. ["cinematic","aerial","slowmo"]),
+  cameraNotes: string (e.g. "anamorphic, wide angle, slow push-in"),
+  moodLabel: string (e.g. "Surreal", "Cinematic", "Abstract"),
+  difficulty: string ("Beginner" | "Intermediate" | "Advanced"),
+  likes: number, saves: number, copies: number, forks: number,
+  isForked: boolean,
+  forkedFromId: string | null,
+  forkedFromAuthorHandle: string | null,
+  createdAt: timestamp
+
+FOLLOWS collection:
+  followerId, followingId, createdAt
+
+SAVES collection:
+  userId, promptId, collectionName, createdAt
+
+LIKES collection:
+  userId, promptId, createdAt
+
+COPIES collection:
+  userId, promptId, createdAt
+
+NOTIFICATIONS collection:
+  userId, type (follow|like|copy|fork|chain_fork|rating|weekly_digest),
+  fromUid, fromHandle, promptId, message, read: boolean, createdAt
+
+----------------------------------------------------
+APP SCREENS (8 total)
+----------------------------------------------------
+
+========== SCREEN 1: FEED ==========
+Top bar:
+  - Left: Logo — "Cue" in white + "rate" in electric blue (#1877F2) with blue glow
+  - Right: Notification bell icon (with blue dot indicator if unread) + settings icon (gear)
+
+Filter chips row (horizontal scroll, pill-shaped):
+  All | Sora | Runway | Kling | Pika | Hailuo | Cinematic | Abstract | Nature | Motion
+  - Active chip: indigo background, indigo glow
+  - Inactive chip: glass surface, muted text
+
+Prompt Cards (vertically stacked, gap 14px):
+  Each card contains:
+  1. Card header:
+     - Avatar (circle, 34px, indigo border)
+     - Creator name (clickable → User Profile screen) + model badge (pill, Inter font)
+     - Time ago (Inter, muted)
+     - Follow button (small pill) — shows "Follow" if not following, "Following" if already
+  2. Fork attribution banner (only on forked posts):
+     - Shows "Forked from @originalCreator" with a fork icon in indigo
+  3. Video thumbnail (16:9 aspect ratio):
+     - Play button ring (blue glow ring) centered over thumbnail
+     - Style pill overlay bottom-left (e.g. "Cinematic" or model name)
+  4. Prompt text box:
+     - Indigo-tinted glass surface
+     - Font: Inter, 11px, color #999
+     - Highlighted keywords in indigo/purple
+  5. Style tags row (pill tags in blue-tinted glass)
+  6. Action row (all pill/rounded buttons):
+     - Like button (heart icon) — turns blue when liked
+     - Save button (bookmark icon) — turns indigo when saved
+     - Fork button (fork icon) — turns green (#4cce8a) when forked, triggers Fork Sheet
+     - Copy pill (right-aligned, indigo) — copies prompt text to clipboard, turns green on success and shows checkmark
+     - Copy count shown on copy pill
+
+Fork Bottom Sheet (appears when Fork is tapped):
+  - Slides up from bottom, rounded-xl, glass surface
+  - "Remix this prompt" heading
+  - Shows original prompt text (read-only, indigo box)
+  - Editable prompt text area for the user's remix
+  - "Publish Fork" button (full-width, indigo gradient, pill)
+  - Cancel button
+
+Bottom navigation (5 tabs, icons + labels):
+  Feed (house icon) | Explore (compass) | Post (plus circle, larger) | Saves (bookmark) | Profile (person)
+  - Active tab: indigo icon + glow + indigo label
+  - Inactive tab: muted icon + muted label
+
+========== SCREEN 2: POST PROMPT ==========
+Top bar: "New Post" title, Cancel (X) button
+
+Content:
+  1. Video upload zone (rounded-xl, dashed indigo border, glass bg):
+     - Cloud upload icon (indigo)
+     - "Upload Video" label
+     - "MP4, MOV — up to 500MB" sublabel
+     - Upload to Firebase Storage on tap
+  2. Prompt text area:
+     - Label: "Your Prompt"
+     - Dark glass textarea, Inter font, indigo focus border + glow
+  3. AI Auto-Fill bar:
+     - Full-width pill button with sparkle (✦) icon
+     - Label: "Auto-fill with AI"
+     - On tap: calls /api/autofill endpoint (see AI Auto-Fill section below)
+     - Shows loading spinner while processing
+     - On complete: populates all fields below with AI-generated values
+  4. Model selector (pill buttons row, tap to select):
+     Sora | Runway | Kling | Pika | Hailuo | Other
+     - Selected: indigo fill + glow
+  5. Style tags input:
+     - Multi-select pill chips + free-text input
+     - Available: cinematic, aerial, slowmo, abstract, nature, motion, surreal, urban, macro, timelapse
+  6. Camera notes input (Inter, placeholder: "anamorphic, wide angle, slow push-in...")
+  7. Mood label selector (pills): Cinematic | Surreal | Abstract | Naturalistic | Dramatic | Minimal
+  8. Difficulty (pills): Beginner | Intermediate | Advanced
+  9. Publish button:
+     - Full-width, tall, rounded-pill
+     - Indigo gradient (left: #5500cc, right: #1877F2)
+     - Label: "Publish to Cuerate"
+     - Indigo glow effect
+
+AI AUTO-FILL SYSTEM (/api/autofill Next.js route):
+  Accepts: { promptText: string, thumbnailBase64?: string }
+  Calls Claude API with this system prompt:
+  ---
+  You are an AI metadata assistant for Cuerate, a platform for AI-generated video prompts.
+  Given a raw AI video prompt (and optionally a thumbnail image), generate structured metadata.
+  Return ONLY valid JSON with no preamble or markdown:
+  {
+    "styleTags": string[] (3-5 tags from: cinematic, aerial, slowmo, abstract, nature, motion, surreal, urban, macro, timelapse),
+    "cameraNotes": string (concise, e.g. "wide angle, slow push-in, warm grade"),
+    "moodLabel": string (one of: Cinematic, Surreal, Abstract, Naturalistic, Dramatic, Minimal),
+    "difficulty": string (one of: Beginner, Intermediate, Advanced),
+    "suggestedModel": string (best guess from: Sora, Runway, Kling, Pika, Hailuo, Other)
+  }
+  Analyze the complexity and specificity of the prompt to determine difficulty.
+  ---
+  Populate all Post screen fields with the returned values.
+
+========== SCREEN 3: EXPLORE ==========
+Top bar: "Explore" title
+
+Search bar (full-width, pill, glass bg, indigo focus glow):
+  Placeholder: "Search prompts, creators, models..."
+
+Section: "Trending Tags" (horizontal scroll):
+  Tag pills showing tag name + prompt count
+  e.g. #cinematic (2.4k), #aerial (1.8k), #slowmo (1.2k)...
+  Tap tag → filters feed to that tag
+
+Section: "Top Creators":
+  List rows, each showing:
+  - Rank number (#1, #2, #3...)
+  - Avatar (circle, indigo border)
+  - Display name + handle
+  - "X prompts copied" stat in indigo
+  - Follow button (pill, indigo)
+  Tap creator row → User Profile screen
+
+Section: "Trending Prompts" (ranked by copy count in last 24hrs):
+  Compact prompt cards (no video thumb, just prompt text + model badge + copy count)
+  Tap → expands to full card view
+
+========== SCREEN 4: SAVES / COLLECTIONS ==========
+Top bar: "Saves" title, Edit button (top right)
+
+Collections grid (2 columns, rounded-xl tiles, glass bg, indigo border on hover):
+  Each tile shows:
+  - Collection name (e.g. Cinematic, Nature, Abstract, My Favs)
+  - Prompt count
+  - 4 micro-thumbnails in a grid preview
+  - Tap → opens collection view (full feed of saved prompts in that collection)
+
+"Recently Saved" section below grid:
+  Horizontal scroll of compact prompt cards (tap → full view)
+
+"New Collection" button:
+  Indigo pill, bottom of collections grid, to create a named collection
+
+========== SCREEN 5: MY PROFILE ==========
+Layout:
+  1. Profile header:
+     - Avatar (large circle, indigo glow border)
+     - Display name (large, Bricolage Grotesque 700)
+     - Handle (@handle, muted, Inter)
+     - Bio text
+     - Social links row (X, Instagram, YouTube icons as small pill links)
+     - Primary model badges row
+  2. Stats row (4 stats, pill container, glass bg):
+     Prompts | Followers | Following | Copies
+     Each stat: number in white (700 weight) + label below in muted Inter
+  3. "Edit Profile" button (pill, glass bg, indigo border)
+  4. Content tabs: Prompts | Forks | Liked
+     - Active tab: indigo underline + indigo text
+  5. Grid of video thumbnails (3 columns, rounded-lg, tap → full card)
+
+========== SCREEN 6: USER PROFILE (other user) ==========
+Same layout as My Profile EXCEPT:
+  - Replace "Edit Profile" with two buttons:
+    a. "Follow" / "Following" (primary, indigo fill, pill)
+    b. "Message" (secondary, glass bg, indigo border, pill)
+  - Mutual followers note below buttons:
+    "Followed by @creator1 and 3 others you follow" (small, Inter, muted indigo)
+  - Cannot see their Saves/Collections
+
+========== SCREEN 7: NOTIFICATIONS ==========
+Top bar: "Notifications" title, "Mark all read" button (small, muted)
+
+Notification types (each as a list row):
+  - follow:        "@handle started following you"
+  - like:          "@handle liked your prompt"
+  - copy:          "@handle copied your prompt — [prompt snippet]" (blue bolt icon)
+  - fork:          "@handle forked your prompt — [prompt snippet]" (green fork icon)
+  - chain_fork:    "Your fork got forked by @handle" (indigo icon)
+  - rating:        "@handle rated your prompt ★★★★☆"
+  - weekly_digest: "Your prompts were copied 47 times this week 🎉"
+
+Unread notifications: slightly brighter background (rgba(111,0,255,0.06))
+Read: standard glass card
+Timestamp (Inter, muted) on right of each row
+Avatar of the "from" user on left
+
+========== SCREEN 8: ONBOARDING ==========
+Full-screen flow, 3 steps with progress dots at top:
+
+Step 1 — Welcome:
+  - Large "Cuerate" logo with indigo glow
+  - Tagline: "curate your prompts. rate the results."
+  - Subtext: "The home for AI video prompts."
+  - "Get Started" button (full-width, indigo gradient, pill)
+
+Step 2 — Pick your models:
+  - "Which AI video tools do you use?" heading
+  - Grid of model cards (Sora, Runway, Kling, Pika, Hailuo, Other)
+  - Each card: model logo/icon, model name
+  - Tap to select (multi-select): selected cards get indigo border + glow
+  - "Continue" button
+
+Step 3 — Follow creators:
+  - "Follow some top creators to seed your feed" heading
+  - List of 6 suggested creator cards (avatar + name + handle + specialty + follow button)
+  - Follow button: pill, indigo when followed, glass when not
+  - "Follow All" shortcut button
+  - "Start Exploring" button (full-width, indigo gradient) → goes to Feed
+
+----------------------------------------------------
+FOLLOW SYSTEM LOGIC
+----------------------------------------------------
+- Follow/Unfollow actions update the FOLLOWS collection in Firestore
+- Following count on your profile and Followers count on their profile update in real-time
+- Feed algorithm: show posts from followed users first (sorted by createdAt desc), then show discovery posts
+- When you fork a prompt, auto-follow that creator if not already following
+- Suggest creators on onboarding based on selected models
+
+----------------------------------------------------
+COPY COUNT TRACKING
+----------------------------------------------------
+- Every time "Copy" is tapped on any prompt card, increment that prompt's copies count in Firestore
+- Also increment the author's totalCopies in their user document
+- Log the copy event in the COPIES collection (userId, promptId, createdAt)
+- On User Profile, display totalCopies as a prominent stat
+- "Copy count" is the primary vanity metric on Cuerate — more important than likes
+
+----------------------------------------------------
+FORK SYSTEM LOGIC
+----------------------------------------------------
+- When a user forks a prompt:
+  1. A new PROMPTS document is created with isForked: true, forkedFromId, forkedFromAuthorHandle
+  2. The original prompt's forks count is incremented
+  3. The original author receives a "fork" notification
+  4. If the user is not already following the original author, auto-follow them
+  5. The forked card shows an attribution banner: "Forked from @originalAuthor"
+
+----------------------------------------------------
+FIREBASE STORAGE STRUCTURE
+----------------------------------------------------
+  /videos/{uid}/{promptId}.mp4
+  /thumbnails/{uid}/{promptId}.jpg
+  /avatars/{uid}/avatar.jpg
+
+All videos and thumbnails are publicly readable.
+Firebase Storage rules: authenticated users can write to their own paths.
+
+----------------------------------------------------
+AUTH FLOW
+----------------------------------------------------
+Use Firebase Authentication:
+  - Email/password signup and login
+  - Google OAuth sign-in
+  - On first login → redirect to Onboarding (Screen 8)
+  - On subsequent logins → redirect to Feed (Screen 1)
+
+----------------------------------------------------
+FUTURE FEATURES BACKLOG (do NOT build now — include as commented stubs)
+----------------------------------------------------
+// FUTURE: Prompt rating (1-5 stars after running)
+// FUTURE: Share button (native share sheet)
+// FUTURE: Version history with diff view
+// FUTURE: Model badge as instant filter tap
+// FUTURE: "Try on" — run prompt directly from card via API integration (Sora, Runway, Kling)
+// FUTURE: Trending page ranked by copy count (last 24hrs)
+// FUTURE: Following vs Discovery feed toggle
+// FUTURE: Curated prompt collections / theme packs
+// FUTURE: Prompt difficulty filter in feed
+// FUTURE: Prompt series (creator groups related prompts into named arc)
+// FUTURE: Fork attribution chain visual tree
+// FUTURE: Prompt quality scorer / linter before publishing
+// FUTURE: AI auto-generate caption/title on post
+// FUTURE: Multimodal video frame analysis for richer metadata
+// FUTURE: Creator tipping (Sui/WAL wallet)
+// FUTURE: Walrus decentralized video storage (replace Firebase Storage)
+// FUTURE: Prompt marketplace
+
+----------------------------------------------------
+DEPLOYMENT
+----------------------------------------------------
+Deploy to Google Cloud Run via Antigravity native deploy.
+Set environment variables:
+  NEXT_PUBLIC_FIREBASE_API_KEY
+  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+  NEXT_PUBLIC_FIREBASE_PROJECT_ID
+  NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+  NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+  NEXT_PUBLIC_FIREBASE_APP_ID
+  ANTHROPIC_API_KEY (server-side only, for AI Auto-Fill route)
+
+====================================================
+END OF FOUNDING PROMPT
+====================================================

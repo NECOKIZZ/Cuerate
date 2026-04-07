@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isPromptLikeCounterUpdate() {
+      return isSignedIn()
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.authorHandle == resource.data.authorHandle
+        && request.resource.data.authorAvatar == resource.data.authorAvatar
+        && request.resource.data.videoUrl == resource.data.videoUrl
+        && request.resource.data.thumbnailUrl == resource.data.thumbnailUrl
+        && request.resource.data.promptText == resource.data.promptText
+        && request.resource.data.model == resource.data.model
+        && request.resource.data.contentType == resource.data.contentType
+        && request.resource.data.aspectRatio == resource.data.aspectRatio
+        && request.resource.data.styleTags == resource.data.styleTags
+        && request.resource.data.cameraNotes == resource.data.cameraNotes
+        && request.resource.data.moodLabel == resource.data.moodLabel
+        && request.resource.data.difficulty == resource.data.difficulty
+        && request.resource.data.saves == resource.data.saves
+        && request.resource.data.copies == resource.data.copies
+        && request.resource.data.forks == resource.data.forks
+        && request.resource.data.isForked == resource.data.isForked
+        && request.resource.data.forkedFromId == resource.data.forkedFromId
+        && request.resource.data.forkedFromAuthorHandle == resource.data.forkedFromAuthorHandle
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.mediaWidth == resource.data.mediaWidth
+        && request.resource.data.mediaHeight == resource.data.mediaHeight
+        && (
+          request.resource.data.likes == resource.data.likes + 1
+          || request.resource.data.likes == resource.data.likes - 1
+        );
+    }
+
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if isOwner(userId);
+    }
+
+    match /authLogs/{logId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /emailLookup/{emailId} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+    }
+
+    match /prompts/{promptId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow update: if isSignedIn()
+        && (
+          resource.data.authorUid == request.auth.uid
+          || isPromptLikeCounterUpdate()
+        );
+    }
+
+    match /promptLikes/{likeId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /notifications/{notificationId} {
+      allow read, update: if isOwner(resource.data.userId);
+      allow create: if isSignedIn();
+    }
+
+    match /collections/{collectionId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
