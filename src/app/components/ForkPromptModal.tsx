@@ -1,11 +1,16 @@
 import { useState } from 'react';
-import { X, Sparkles, Tag } from 'lucide-react';
+import { Loader2, X, Sparkles, Tag } from 'lucide-react';
 import { Prompt } from '../../lib/types';
+
+interface ForkPromptSaveInput {
+  forkedPrompt: Partial<Prompt>;
+  mediaFile: File | null;
+}
 
 interface ForkPromptModalProps {
   prompt: Prompt;
   onClose: () => void;
-  onSave: (forkedPrompt: Partial<Prompt>) => void;
+  onSave: (input: ForkPromptSaveInput) => Promise<void> | void;
 }
 
 export function ForkPromptModal({ prompt, onClose, onSave }: ForkPromptModalProps) {
@@ -13,15 +18,46 @@ export function ForkPromptModal({ prompt, onClose, onSave }: ForkPromptModalProp
   const [tags, setTags] = useState(prompt.styleTags.join(', '));
   const [aiModel, setAiModel] = useState(prompt.model);
   const [moodLabel, setMoodLabel] = useState(prompt.moodLabel);
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  const handleSave = () => {
-    onSave({
-      promptText,
-      styleTags: tags.split(',').map(tag => tag.trim()).filter(Boolean),
-      model: aiModel,
-      moodLabel,
-    });
-    onClose();
+  const handleSave = async () => {
+    if (isSaving) {
+      return;
+    }
+
+    if (mediaFile) {
+      const expectedType = prompt.contentType === 'video' ? 'video/' : 'image/';
+      if (!mediaFile.type.startsWith(expectedType)) {
+        setSaveError(
+          prompt.contentType === 'video'
+            ? 'This fork needs a video file. Please upload a video.'
+            : 'This fork needs an image file. Please upload an image.',
+        );
+        return;
+      }
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      await onSave({
+        forkedPrompt: {
+          promptText,
+          styleTags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+          model: aiModel,
+          moodLabel,
+        },
+        mediaFile,
+      });
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save fork.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -68,19 +104,32 @@ export function ForkPromptModal({ prompt, onClose, onSave }: ForkPromptModalProp
           {/* Media Upload Area */}
           <div>
             <label className="block font-accent text-sm font-medium text-[var(--cuerate-text-1)] mb-2">
-              Upload Media
+              Upload Media ({prompt.contentType === 'video' ? 'Video' : 'Image'})
             </label>
-            <div className="relative aspect-video rounded-[var(--cuerate-r-lg)] overflow-hidden border-2 border-dashed border-[var(--cuerate-text-3)] glass-surface flex items-center justify-center cursor-pointer hover:border-[var(--cuerate-indigo)] transition-all">
-              <div className="text-center">
+            <label className="relative aspect-video rounded-[var(--cuerate-r-lg)] overflow-hidden border-2 border-dashed border-[var(--cuerate-text-3)] glass-surface flex items-center justify-center cursor-pointer hover:border-[var(--cuerate-indigo)] transition-all">
+              <input
+                type="file"
+                accept={prompt.contentType === 'video' ? 'video/mp4,video/quicktime,video/webm' : 'image/*'}
+                className="hidden"
+                onChange={(event) => {
+                  setMediaFile(event.target.files?.[0] ?? null);
+                  setSaveError(null);
+                }}
+              />
+              <div className="text-center px-4">
                 <div className="w-12 h-12 rounded-full bg-[var(--cuerate-indigo)]/20 flex items-center justify-center mx-auto mb-2">
                   <svg className="w-6 h-6 text-[var(--cuerate-indigo)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
                 </div>
-                <p className="font-accent text-sm text-[var(--cuerate-text-1)]">Click to upload</p>
-                <p className="font-accent text-xs text-[var(--cuerate-text-2)] mt-1">Image or Video</p>
+                <p className="font-accent text-sm text-[var(--cuerate-text-1)]">
+                  {mediaFile ? mediaFile.name : 'Click to upload'}
+                </p>
+                <p className="font-accent text-xs text-[var(--cuerate-text-2)] mt-1">
+                  {prompt.contentType === 'video' ? 'Video only' : 'Image only'}
+                </p>
               </div>
-            </div>
+            </label>
           </div>
 
           {/* Prompt Text Input */}
@@ -142,6 +191,12 @@ export function ForkPromptModal({ prompt, onClose, onSave }: ForkPromptModalProp
               Separate tags with commas (e.g., cyberpunk, neon, futuristic)
             </p>
           </div>
+
+          {saveError && (
+            <div className="rounded-[var(--cuerate-r-md)] border border-red-500/35 bg-red-500/10 px-3 py-2 font-accent text-xs text-red-200">
+              {saveError}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -153,10 +208,18 @@ export function ForkPromptModal({ prompt, onClose, onSave }: ForkPromptModalProp
             Cancel
           </button>
           <button
-            onClick={handleSave}
-            className="px-5 py-2 rounded-[var(--cuerate-r-pill)] bg-[#4cce8a] text-white font-accent text-sm font-medium hover:opacity-90 transition-all shadow-lg shadow-[#4cce8a]/20"
+            onClick={() => void handleSave()}
+            disabled={!promptText.trim() || isSaving}
+            className="px-5 py-2 rounded-[var(--cuerate-r-pill)] bg-[#4cce8a] text-white font-accent text-sm font-medium hover:opacity-90 transition-all shadow-lg shadow-[#4cce8a]/20 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Save Fork
+            {isSaving ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Saving...
+              </span>
+            ) : (
+              'Save Fork'
+            )}
           </button>
         </div>
       </div>

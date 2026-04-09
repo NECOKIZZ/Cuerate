@@ -1,40 +1,66 @@
 import { useState } from 'react';
-import { X, Upload, Sparkles, Loader2 } from 'lucide-react';
+import { Loader2, Sparkles, Upload, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
-import { authApi, metaApi, promptsApi, uploadsApi } from '../../lib/backend';
+import { authApi, metaApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
+import {
+  createVideoThumbnailFile,
+  detectImageFileDimensions,
+  detectVideoFileDimensions,
+} from '../../lib/media';
 import { useBackendQuery } from '../../lib/useBackendQuery';
-import type { PromptContentType } from '../../lib/types';
+import type {
+  PromptContentType,
+  WorkflowGenerationType,
+  WorkflowStepCreateInput,
+} from '../../lib/types';
 
-function detectImageDimensions(url: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => reject(new Error('Could not load the thumbnail URL. Please use a valid public image link.'));
-    image.src = url;
-  });
+type PostMode = 'prompt' | 'workflow';
+
+interface WorkflowDraftStep {
+  id: string;
+  label: string;
+  generationType: WorkflowGenerationType;
+  promptText: string;
+  note: string;
+  inputImageFile: File | null;
+  startFrameFile: File | null;
+  endFrameFile: File | null;
+  resultMediaFile: File | null;
 }
 
-function detectVideoFileDimensions(file: File): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.onloadedmetadata = () => {
-      resolve({ width: video.videoWidth, height: video.videoHeight });
-      URL.revokeObjectURL(objectUrl);
-    };
-    video.onerror = () => {
-      reject(new Error('Could not read the uploaded video metadata.'));
-      URL.revokeObjectURL(objectUrl);
-    };
-    video.src = objectUrl;
-  });
+const generationTypeOptions: Array<{ value: WorkflowGenerationType; label: string }> = [
+  { value: 'prompt_to_video', label: 'Prompt to video' },
+  { value: 'image_to_video', label: 'Image to video' },
+  { value: 'frames_to_video', label: 'Two frames to video' },
+  { value: 'prompt_to_image', label: 'Prompt to image' },
+];
+
+function createWorkflowStep(index: number): WorkflowDraftStep {
+  return {
+    id: `step-${index + 1}`,
+    label: `Step ${index + 1}`,
+    generationType: 'prompt_to_video',
+    promptText: '',
+    note: '',
+    inputImageFile: null,
+    startFrameFile: null,
+    endFrameFile: null,
+    resultMediaFile: null,
+  };
+}
+
+function getExpectedResultType(type: WorkflowGenerationType): PromptContentType {
+  return type === 'prompt_to_image' ? 'image' : 'video';
 }
 
 export function Post() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [postMode, setPostMode] = useState<PostMode>('prompt');
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
   const [promptText, setPromptText] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -42,11 +68,18 @@ export function Post() {
   const [selectedMood, setSelectedMood] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState('');
   const [isAutoFilling, setIsAutoFilling] = useState(false);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [thumbnailUrl, setThumbnailUrl] = useState('');
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [contentType, setContentType] = useState<PromptContentType>('image');
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [publishError, setPublishError] = useState<string | null>(null);
+
+  const [workflowTitle, setWorkflowTitle] = useState('');
+  const [workflowDescription, setWorkflowDescription] = useState('');
+  const [workflowTool, setWorkflowTool] = useState('');
+  const [workflowTags, setWorkflowTags] = useState<string[]>([]);
+  const [workflowCoverFile, setWorkflowCoverFile] = useState<File | null>(null);
+  const [workflowSteps, setWorkflowSteps] = useState<WorkflowDraftStep[]>([
+    createWorkflowStep(0),
+  ]);
+
   const { data: availableModels } = useBackendQuery(() => metaApi.getAvailableModels(), [], []);
   const { data: availableStyleTags } = useBackendQuery(() => metaApi.getAvailableStyleTags(), [], []);
   const { data: availableMoodLabels } = useBackendQuery(() => metaApi.getAvailableMoodLabels(), [], []);
@@ -54,13 +87,256 @@ export function Post() {
   const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
   const activeUser = user ?? currentUser;
 
+  const handleAutoFill = async () => {
+    setIsAutoFilling(true);
+    window.setTimeout(() => {
+      setSelectedTags(['cinematic', 'aerial', 'nature']);
+      setCameraNotes('anamorphic lens, slow dolly forward, shallow depth of field');
+      setSelectedMood('Cinematic');
+      setSelectedDifficulty('Intermediate');
+      setSelectedModel('Sora');
+      setIsAutoFilling(false);
+    }, 1200);
+  };
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((entry) => entry !== tag) : [...prev, tag],
+    );
+  };
+
+  const toggleWorkflowTag = (tag: string) => {
+    setWorkflowTags((prev) =>
+      prev.includes(tag) ? prev.filter((entry) => entry !== tag) : [...prev, tag],
+    );
+  };
+
+  const updateWorkflowStep = (stepId: string, patch: Partial<WorkflowDraftStep>) => {
+    setWorkflowSteps((prev) =>
+      prev.map((step) => (step.id === stepId ? { ...step, ...patch } : step)),
+    );
+  };
+
+  const handleWorkflowGenerationType = (stepId: string, value: WorkflowGenerationType) => {
+    updateWorkflowStep(stepId, {
+      generationType: value,
+      inputImageFile: null,
+      startFrameFile: null,
+      endFrameFile: null,
+      resultMediaFile: null,
+    });
+  };
+
+  const addWorkflowStep = () => {
+    setWorkflowSteps((prev) => {
+      if (prev.length >= 8) {
+        return prev;
+      }
+      return [...prev, createWorkflowStep(prev.length)];
+    });
+  };
+
+  const removeWorkflowStep = (stepId: string) => {
+    setWorkflowSteps((prev) => {
+      if (prev.length <= 1) {
+        return prev;
+      }
+      return prev.filter((entry) => entry.id !== stepId);
+    });
+  };
+
+  const publishPrompt = async () => {
+    if (!activeUser) {
+      return;
+    }
+    if (!mediaFile) {
+      throw new Error('Please upload an image or video before publishing.');
+    }
+
+    let videoUrl = '';
+    let thumbnailUrl = '';
+    let mediaWidth: number | undefined;
+    let mediaHeight: number | undefined;
+
+    if (contentType === 'video') {
+      if (!mediaFile.type.startsWith('video/')) {
+        throw new Error('Selected file is not a video.');
+      }
+      const dims = await detectVideoFileDimensions(mediaFile);
+      mediaWidth = dims.width;
+      mediaHeight = dims.height;
+      const videoUpload = await uploadsApi.uploadPromptMedia(mediaFile, activeUser.uid);
+      const thumbnailUpload = await uploadsApi.uploadPromptMedia(
+        await createVideoThumbnailFile(mediaFile),
+        activeUser.uid,
+      );
+      videoUrl = videoUpload.downloadUrl;
+      thumbnailUrl = thumbnailUpload.downloadUrl;
+    } else {
+      if (!mediaFile.type.startsWith('image/')) {
+        throw new Error('Selected file is not an image.');
+      }
+      const dims = await detectImageFileDimensions(mediaFile);
+      mediaWidth = dims.width;
+      mediaHeight = dims.height;
+      const imageUpload = await uploadsApi.uploadPromptMedia(mediaFile, activeUser.uid);
+      thumbnailUrl = imageUpload.downloadUrl;
+    }
+
+    await promptsApi.createPrompt({
+      authorUid: activeUser.uid,
+      promptText: promptText.trim(),
+      model: selectedModel,
+      styleTags: selectedTags,
+      cameraNotes,
+      moodLabel: selectedMood || 'Cinematic',
+      difficulty: selectedDifficulty || 'Beginner',
+      contentType,
+      aspectRatio: mediaWidth && mediaHeight ? (mediaHeight > mediaWidth ? 'portrait' : 'landscape') : 'landscape',
+      videoUrl,
+      thumbnailUrl,
+      mediaWidth,
+      mediaHeight,
+    });
+  };
+
+  const publishWorkflow = async () => {
+    if (!activeUser) {
+      return;
+    }
+    if (!workflowTitle.trim()) {
+      throw new Error('Workflow title is required.');
+    }
+    if (!workflowTool.trim()) {
+      throw new Error('Please select an AI tool.');
+    }
+    if (!workflowCoverFile) {
+      throw new Error('Please upload a workflow cover video.');
+    }
+    if (!workflowCoverFile.type.startsWith('video/')) {
+      throw new Error('Workflow cover must be a video file.');
+    }
+
+    const coverDims = await detectVideoFileDimensions(workflowCoverFile);
+    const coverVideoUpload = await uploadsApi.uploadPromptMedia(workflowCoverFile, activeUser.uid);
+    const coverThumbnailUpload = await uploadsApi.uploadPromptMedia(
+      await createVideoThumbnailFile(workflowCoverFile),
+      activeUser.uid,
+    );
+
+    const steps: WorkflowStepCreateInput[] = [];
+
+    for (let i = 0; i < workflowSteps.length; i += 1) {
+      const step = workflowSteps[i];
+      const stepIndex = i + 1;
+      if (!step.promptText.trim()) {
+        throw new Error(`Step ${stepIndex}: prompt text is required.`);
+      }
+
+      const expectedType = getExpectedResultType(step.generationType);
+      if (!step.resultMediaFile) {
+        throw new Error(`Step ${stepIndex}: result file is required.`);
+      }
+      if (expectedType === 'video' && !step.resultMediaFile.type.startsWith('video/')) {
+        throw new Error(`Step ${stepIndex}: result must be a video.`);
+      }
+      if (expectedType === 'image' && !step.resultMediaFile.type.startsWith('image/')) {
+        throw new Error(`Step ${stepIndex}: result must be an image.`);
+      }
+
+      let inputImageUrl: string | undefined;
+      let startFrameUrl: string | undefined;
+      let endFrameUrl: string | undefined;
+
+      if (step.generationType === 'image_to_video') {
+        if (!step.inputImageFile || !step.inputImageFile.type.startsWith('image/')) {
+          throw new Error(`Step ${stepIndex}: source image is required.`);
+        }
+        inputImageUrl = (await uploadsApi.uploadPromptMedia(step.inputImageFile, activeUser.uid)).downloadUrl;
+      }
+
+      if (step.generationType === 'frames_to_video') {
+        if (!step.startFrameFile || !step.startFrameFile.type.startsWith('image/')) {
+          throw new Error(`Step ${stepIndex}: start frame image is required.`);
+        }
+        if (!step.endFrameFile || !step.endFrameFile.type.startsWith('image/')) {
+          throw new Error(`Step ${stepIndex}: end frame image is required.`);
+        }
+        startFrameUrl = (await uploadsApi.uploadPromptMedia(step.startFrameFile, activeUser.uid)).downloadUrl;
+        endFrameUrl = (await uploadsApi.uploadPromptMedia(step.endFrameFile, activeUser.uid)).downloadUrl;
+      }
+
+      const resultUpload = await uploadsApi.uploadPromptMedia(step.resultMediaFile, activeUser.uid);
+      let resultThumbnailUrl = resultUpload.downloadUrl;
+      if (expectedType === 'video') {
+        resultThumbnailUrl = (
+          await uploadsApi.uploadPromptMedia(
+            await createVideoThumbnailFile(step.resultMediaFile),
+            activeUser.uid,
+          )
+        ).downloadUrl;
+      }
+
+      steps.push({
+        label: step.label.trim() || `Step ${stepIndex}`,
+        generationType: step.generationType,
+        promptText: step.promptText.trim(),
+        note: step.note.trim() || undefined,
+        inputImageUrl,
+        startFrameUrl,
+        endFrameUrl,
+        resultMediaUrl: resultUpload.downloadUrl,
+        resultThumbnailUrl,
+        resultContentType: expectedType,
+      });
+    }
+
+    const created = await workflowsApi.createWorkflow({
+      authorUid: activeUser.uid,
+      title: workflowTitle.trim(),
+      tool: workflowTool.trim(),
+      description: workflowDescription.trim(),
+      coverVideoUrl: coverVideoUpload.downloadUrl,
+      coverThumbnailUrl: coverThumbnailUpload.downloadUrl,
+      tags: workflowTags,
+      mediaAspectRatio: coverDims.height > coverDims.width ? 'portrait' : 'landscape',
+      steps,
+    });
+
+    navigate(`/workflow/${created.id}`);
+  };
+
+  const handlePublish = async () => {
+    if (!activeUser) {
+      return;
+    }
+
+    setIsPublishing(true);
+    setPublishError(null);
+    try {
+      if (postMode === 'workflow') {
+        await publishWorkflow();
+      } else {
+        await publishPrompt();
+        navigate('/');
+      }
+    } catch (error) {
+      setPublishError(error instanceof Error ? error.message : 'Could not publish.');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const workflowCanPublish = workflowTitle.trim() && workflowTool.trim() && workflowCoverFile;
+  const promptCanPublish = promptText.trim() && selectedModel && mediaFile;
+
   if (!activeUser) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
         <div className="max-w-md w-full glass-surface rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] p-8 text-center">
           <h1 className="font-primary font-bold text-2xl text-[var(--cuerate-text-1)] mb-3">Log in to post</h1>
           <p className="font-accent text-sm text-[var(--cuerate-text-2)] mb-6">
-            Publishing prompts and uploading media now runs through the auth-backed Firebase layer.
+            Publishing prompts and workflows needs an authenticated session.
           </p>
           <button
             onClick={() => navigate('/auth')}
@@ -72,81 +348,6 @@ export function Post() {
       </div>
     );
   }
-
-  const handleAutoFill = async () => {
-    setIsAutoFilling(true);
-    setTimeout(() => {
-      setSelectedTags(['cinematic', 'aerial', 'nature']);
-      setCameraNotes('anamorphic lens, slow dolly forward, shallow depth of field');
-      setSelectedMood('Cinematic');
-      setSelectedDifficulty('Intermediate');
-      setSelectedModel('Sora');
-      setIsAutoFilling(false);
-    }, 1500);
-  };
-
-  const handlePublish = async () => {
-    if (!activeUser) {
-      return;
-    }
-
-    setIsPublishing(true);
-    setPublishError(null);
-
-    try {
-      let uploadResult;
-      let mediaWidth: number | undefined;
-      let mediaHeight: number | undefined;
-
-      if (videoFile) {
-        const videoDimensions = await detectVideoFileDimensions(videoFile);
-        mediaWidth = videoDimensions.width;
-        mediaHeight = videoDimensions.height;
-        uploadResult = await uploadsApi.uploadPromptMedia(videoFile, activeUser.uid);
-      } else if (thumbnailUrl.trim()) {
-        const imageDimensions = await detectImageDimensions(thumbnailUrl.trim());
-        mediaWidth = imageDimensions.width;
-        mediaHeight = imageDimensions.height;
-      }
-
-      const finalContentType: PromptContentType = videoFile ? 'video' : contentType;
-      const finalThumbnailUrl = thumbnailUrl.trim() || uploadResult?.downloadUrl || '';
-      const finalAspectRatio =
-        mediaWidth && mediaHeight
-          ? mediaHeight > mediaWidth
-            ? 'portrait'
-            : 'landscape'
-          : 'landscape';
-
-      await promptsApi.createPrompt({
-        authorUid: activeUser.uid,
-        promptText: promptText.trim(),
-        model: selectedModel,
-        styleTags: selectedTags,
-        cameraNotes,
-        moodLabel: selectedMood || 'Cinematic',
-        difficulty: selectedDifficulty || 'Beginner',
-        contentType: finalContentType,
-        aspectRatio: finalAspectRatio,
-        videoUrl: uploadResult?.downloadUrl ?? '',
-        thumbnailUrl: finalThumbnailUrl,
-        mediaWidth,
-        mediaHeight,
-      });
-
-      navigate('/');
-    } catch (error) {
-      setPublishError(error instanceof Error ? error.message : 'Could not publish your prompt.');
-    } finally {
-      setIsPublishing(false);
-    }
-  };
-
-  const toggleTag = (tag: string) => {
-    setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((entry) => entry !== tag) : [...prev, tag],
-    );
-  };
 
   return (
     <div className="min-h-screen pb-8">
@@ -166,73 +367,398 @@ export function Post() {
 
       <div className="px-4 md:px-8 py-6 max-w-3xl md:mx-auto space-y-6">
         <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Post Type
-          </label>
           <div className="flex flex-wrap gap-2">
-            {(['image', 'video'] as const).map((entry) => (
+            {(['prompt', 'workflow'] as const).map((entry) => (
               <button
                 key={entry}
-                onClick={() => setContentType(entry)}
+                onClick={() => {
+                  setPostMode(entry);
+                  setPublishError(null);
+                }}
                 className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
-                  contentType === entry
-                    ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                  postMode === entry
+                    ? entry === 'workflow'
+                      ? 'bg-[#f5a623] text-[#1b1205] shadow-[0_0_24px_rgba(245,166,35,0.28)]'
+                      : 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
                     : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
                 }`}
               >
-                {entry === 'image' ? 'Image / Text Prompt' : 'Video Prompt'}
+                {entry === 'prompt' ? 'Single Prompt' : 'Workflow'}
               </button>
             ))}
           </div>
         </div>
 
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Video Upload
-          </label>
-          <label className="border-2 border-dashed border-[var(--cuerate-indigo)]/30 rounded-[var(--cuerate-r-xl)] glass-surface p-8 flex flex-col items-center justify-center gap-3 hover:border-[var(--cuerate-indigo)]/50 transition-colors cursor-pointer">
-            <input
-              type="file"
-              accept="video/mp4,video/quicktime,video/webm"
-              className="hidden"
-              onChange={(event) => setVideoFile(event.target.files?.[0] ?? null)}
-            />
-            <Upload className="w-8 h-8 text-[var(--cuerate-indigo)]" />
-            <div className="text-center">
-              <p className="font-accent text-sm text-[var(--cuerate-text-1)] mb-1">
-                {videoFile ? videoFile.name : 'Upload Video (Optional)'}
-              </p>
-              <p className="font-accent text-xs text-[var(--cuerate-text-2)]">
-                Leave this empty for text/image-style posts until Storage is ready.
-              </p>
+        {postMode === 'prompt' ? (
+          <>
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Post Type</label>
+              <div className="flex flex-wrap gap-2">
+                {(['image', 'video'] as const).map((entry) => (
+                  <button
+                    key={entry}
+                    onClick={() => {
+                      setContentType(entry);
+                      setMediaFile(null);
+                      setPublishError(null);
+                    }}
+                    className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
+                      contentType === entry
+                        ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                    }`}
+                  >
+                    {entry === 'image' ? 'Image Prompt' : 'Video Prompt'}
+                  </button>
+                ))}
+              </div>
             </div>
-          </label>
-        </div>
 
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Thumbnail Image URL
-          </label>
-          <input
-            type="url"
-            value={thumbnailUrl}
-            onChange={(event) => setThumbnailUrl(event.target.value)}
-            placeholder="https://example.com/thumbnail.jpg"
-            className="w-full px-4 py-3 rounded-[var(--cuerate-r-md)] glass-surface border border-[var(--cuerate-text-3)] focus:border-[var(--cuerate-indigo)] focus:indigo-glow outline-none font-accent text-sm text-[var(--cuerate-text-1)] placeholder:text-[var(--cuerate-text-2)] transition-all"
-          />
-        </div>
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
+                {contentType === 'video' ? 'Video Upload' : 'Image Upload'}
+              </label>
+              <label className="border-2 border-dashed border-[var(--cuerate-indigo)]/30 rounded-[var(--cuerate-r-xl)] glass-surface p-8 flex flex-col items-center justify-center gap-3 hover:border-[var(--cuerate-indigo)]/50 transition-colors cursor-pointer">
+                <input
+                  type="file"
+                  accept={contentType === 'video' ? 'video/mp4,video/quicktime,video/webm' : 'image/*'}
+                  className="hidden"
+                  onChange={(event) => {
+                    setMediaFile(event.target.files?.[0] ?? null);
+                    setPublishError(null);
+                  }}
+                />
+                <Upload className="w-8 h-8 text-[var(--cuerate-indigo)]" />
+                <p className="font-accent text-sm text-[var(--cuerate-text-1)]">
+                  {mediaFile ? mediaFile.name : contentType === 'video' ? 'Upload Video' : 'Upload Image'}
+                </p>
+              </label>
+            </div>
 
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Your Prompt
-          </label>
-          <textarea
-            value={promptText}
-            onChange={(event) => setPromptText(event.target.value)}
-            placeholder="Describe your AI video prompt in detail..."
-            className="w-full h-32 px-4 py-3 rounded-[var(--cuerate-r-md)] glass-surface border border-[var(--cuerate-text-3)] focus:border-[var(--cuerate-indigo)] focus:indigo-glow outline-none font-accent text-sm text-[var(--cuerate-text-1)] placeholder:text-[var(--cuerate-text-2)] resize-none transition-all"
-          />
-        </div>
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Your Prompt</label>
+              <textarea
+                value={promptText}
+                onChange={(event) => setPromptText(event.target.value)}
+                placeholder="Describe your AI prompt in detail..."
+                className="w-full h-32 px-4 py-3 rounded-[var(--cuerate-r-md)] glass-surface border border-[var(--cuerate-text-3)] focus:border-[var(--cuerate-indigo)] focus:indigo-glow outline-none font-accent text-sm text-[var(--cuerate-text-1)] placeholder:text-[var(--cuerate-text-2)] resize-none transition-all"
+              />
+            </div>
+
+            <button
+              onClick={handleAutoFill}
+              disabled={isAutoFilling || !promptText}
+              className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-[var(--cuerate-r-pill)] bg-gradient-to-r from-[var(--cuerate-indigo)] to-[var(--cuerate-blue)] text-white font-accent font-medium indigo-glow hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isAutoFilling ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Auto-filling with AI...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-5 h-5" />
+                  Auto-fill with AI
+                </>
+              )}
+            </button>
+
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Model</label>
+              <div className="flex flex-wrap gap-2">
+                {availableModels.map((model) => (
+                  <button
+                    key={model}
+                    onClick={() => setSelectedModel(model)}
+                    className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
+                      selectedModel === model
+                        ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                    }`}
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Style Tags</label>
+              <div className="flex flex-wrap gap-2">
+                {availableStyleTags.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => toggleTag(tag)}
+                    className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
+                      selectedTags.includes(tag)
+                        ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                    }`}
+                  >
+                    #{tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Camera Notes</label>
+              <input
+                type="text"
+                value={cameraNotes}
+                onChange={(event) => setCameraNotes(event.target.value)}
+                placeholder="anamorphic, wide angle, slow push-in..."
+                className="w-full px-4 py-3 rounded-[var(--cuerate-r-md)] glass-surface border border-[var(--cuerate-text-3)] focus:border-[var(--cuerate-indigo)] focus:indigo-glow outline-none font-accent text-sm text-[var(--cuerate-text-1)] placeholder:text-[var(--cuerate-text-2)] transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Mood</label>
+              <div className="flex flex-wrap gap-2">
+                {availableMoodLabels.map((mood) => (
+                  <button
+                    key={mood}
+                    onClick={() => setSelectedMood(mood)}
+                    className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
+                      selectedMood === mood
+                        ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                    }`}
+                  >
+                    {mood}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Difficulty</label>
+              <div className="flex flex-wrap gap-2">
+                {difficultyLevels.map((level) => (
+                  <button
+                    key={level}
+                    onClick={() => setSelectedDifficulty(level)}
+                    className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
+                      selectedDifficulty === level
+                        ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                    }`}
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="space-y-6 rounded-[var(--cuerate-r-xl)] border border-[#f5a623]/25 bg-[linear-gradient(180deg,rgba(245,166,35,0.12),rgba(245,166,35,0.04))] p-5">
+            <div>
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
+                Final Result (Video)
+              </label>
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-[var(--cuerate-r-xl)] border-2 border-dashed border-[#f5a623]/30 bg-black/10 p-6 transition-colors hover:border-[#f5a623]/55">
+                <input
+                  type="file"
+                  accept="video/mp4,video/quicktime,video/webm"
+                  className="hidden"
+                  onChange={(event) => {
+                    setWorkflowCoverFile(event.target.files?.[0] ?? null);
+                    setPublishError(null);
+                  }}
+                />
+                <Upload className="h-8 w-8 text-[#f5a623]" />
+                <p className="font-accent text-sm text-[var(--cuerate-text-1)]">
+                  {workflowCoverFile ? workflowCoverFile.name : 'Upload final result video'}
+                </p>
+              </label>
+            </div>
+
+            <input
+              type="text"
+              value={workflowTitle}
+              onChange={(event) => setWorkflowTitle(event.target.value)}
+              placeholder="Workflow title"
+              className="w-full rounded-[var(--cuerate-r-md)] border border-[#f5a623]/20 bg-black/15 px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none transition-all focus:border-[#f5a623]"
+            />
+
+            <textarea
+              value={workflowDescription}
+              onChange={(event) => setWorkflowDescription(event.target.value)}
+              placeholder="Workflow description"
+              className="h-24 w-full rounded-[var(--cuerate-r-md)] border border-[#f5a623]/20 bg-black/15 px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none transition-all focus:border-[#f5a623]"
+            />
+
+            <div className="space-y-3">
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] block">Tags</label>
+              <div className="flex flex-wrap gap-2">
+                {availableStyleTags.map((tag) => (
+                  <button
+                    key={`workflow-tag-${tag}`}
+                    onClick={() => toggleWorkflowTag(tag)}
+                    className={`rounded-[var(--cuerate-r-pill)] px-4 py-2 font-accent text-sm transition-all ${
+                      workflowTags.includes(tag)
+                        ? 'bg-[#f5a623] text-[#1b1205] shadow-[0_0_24px_rgba(245,166,35,0.28)]'
+                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                    }`}
+                  >
+                    #{tag}
+                  </button>
+                ))}
+              </div>
+
+              <label className="font-accent text-sm text-[var(--cuerate-text-1)] block">Model / Tool</label>
+              <div className="flex flex-wrap gap-2">
+                {availableModels.map((model) => (
+                  <button
+                    key={`workflow-tool-${model}`}
+                    onClick={() => setWorkflowTool(model)}
+                    className={`rounded-[var(--cuerate-r-pill)] px-4 py-2 font-accent text-sm transition-all ${
+                      workflowTool === model
+                        ? 'bg-[#f5a623] text-[#1b1205] shadow-[0_0_24px_rgba(245,166,35,0.28)]'
+                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                    }`}
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {workflowSteps.map((step, index) => {
+                const expectedType = getExpectedResultType(step.generationType);
+                return (
+                  <div
+                    key={step.id}
+                    className={`rounded-[var(--cuerate-r-lg)] border border-[#f5a623]/18 bg-black/12 p-4 space-y-3 ${
+                      index > 0 ? 'mt-6 pt-6 border-t-2 border-t-[#f5a623]/28' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="rounded-full bg-[#f5a623]/12 px-3 py-1 font-accent text-xs font-medium text-[#ffd27c]">
+                        Step {index + 1}
+                      </span>
+                      {workflowSteps.length > 1 && (
+                        <button
+                          onClick={() => removeWorkflowStep(step.id)}
+                          className="rounded-[var(--cuerate-r-pill)] border border-red-400/30 px-3 py-1 font-accent text-xs text-red-300 hover:bg-red-500/10"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+
+                    <input
+                      type="text"
+                      value={step.label}
+                      onChange={(event) => updateWorkflowStep(step.id, { label: event.target.value })}
+                      placeholder="Step label"
+                      className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-black/15 px-3 py-2 font-accent text-sm text-[var(--cuerate-text-1)]"
+                    />
+
+                    <div className="flex flex-wrap gap-2">
+                      {generationTypeOptions.map((option) => (
+                        <button
+                          key={`${step.id}-${option.value}`}
+                          onClick={() => handleWorkflowGenerationType(step.id, option.value)}
+                          className={`rounded-[var(--cuerate-r-pill)] px-3 py-1.5 font-accent text-xs transition-all ${
+                            step.generationType === option.value
+                              ? 'bg-[#f5a623] text-[#1b1205]'
+                              : 'glass-surface text-[var(--cuerate-text-2)]'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <textarea
+                      value={step.promptText}
+                      onChange={(event) => updateWorkflowStep(step.id, { promptText: event.target.value })}
+                      placeholder="Prompt text"
+                      className="h-20 w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-black/15 px-3 py-2 font-accent text-sm text-[var(--cuerate-text-1)]"
+                    />
+
+                    {step.generationType === 'image_to_video' && (
+                      <label className="flex cursor-pointer items-center justify-between rounded-[var(--cuerate-r-md)] border border-[#f5a623]/20 bg-black/20 px-3 py-2.5 hover:border-[#f5a623]/45 transition-colors">
+                        <span className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                          {step.inputImageFile ? step.inputImageFile.name : 'Upload source image'}
+                        </span>
+                        <Upload className="h-4 w-4 text-[#ffd27c]" />
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(event) => updateWorkflowStep(step.id, { inputImageFile: event.target.files?.[0] ?? null })}
+                        />
+                      </label>
+                    )}
+
+                    {step.generationType === 'frames_to_video' && (
+                      <div className="grid md:grid-cols-2 gap-2">
+                        <label className="flex cursor-pointer items-center justify-between rounded-[var(--cuerate-r-md)] border border-[#f5a623]/20 bg-black/20 px-3 py-2.5 hover:border-[#f5a623]/45 transition-colors">
+                          <span className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                            {step.startFrameFile ? step.startFrameFile.name : 'Upload start frame'}
+                          </span>
+                          <Upload className="h-4 w-4 text-[#ffd27c]" />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(event) => updateWorkflowStep(step.id, { startFrameFile: event.target.files?.[0] ?? null })}
+                          />
+                        </label>
+                        <label className="flex cursor-pointer items-center justify-between rounded-[var(--cuerate-r-md)] border border-[#f5a623]/20 bg-black/20 px-3 py-2.5 hover:border-[#f5a623]/45 transition-colors">
+                          <span className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                            {step.endFrameFile ? step.endFrameFile.name : 'Upload end frame'}
+                          </span>
+                          <Upload className="h-4 w-4 text-[#ffd27c]" />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(event) => updateWorkflowStep(step.id, { endFrameFile: event.target.files?.[0] ?? null })}
+                          />
+                        </label>
+                      </div>
+                    )}
+
+                    <label className="flex cursor-pointer items-center justify-between rounded-[var(--cuerate-r-md)] border border-[#f5a623]/20 bg-black/20 px-3 py-2.5 hover:border-[#f5a623]/45 transition-colors">
+                      <span className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                        {step.resultMediaFile
+                          ? step.resultMediaFile.name
+                          : expectedType === 'video'
+                            ? 'Upload Video Results'
+                            : 'Upload Image Results'}
+                      </span>
+                      <Upload className="h-4 w-4 text-[#ffd27c]" />
+                      <input
+                        type="file"
+                        accept={expectedType === 'video' ? 'video/mp4,video/quicktime,video/webm' : 'image/*'}
+                        className="hidden"
+                        onChange={(event) => updateWorkflowStep(step.id, { resultMediaFile: event.target.files?.[0] ?? null })}
+                      />
+                    </label>
+
+                    <textarea
+                      value={step.note}
+                      onChange={(event) => updateWorkflowStep(step.id, { note: event.target.value })}
+                      placeholder="Side note (optional)"
+                      className="h-16 w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-black/15 px-3 py-2 font-accent text-sm text-[var(--cuerate-text-1)]"
+                    />
+                  </div>
+                );
+              })}
+              <button
+                onClick={addWorkflowStep}
+                className="h-10 w-10 rounded-full border border-[#f5a623]/30 text-[#ffd27c] text-xl leading-none hover:bg-[#f5a623]/10"
+                aria-label="Add step"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        )}
 
         {publishError && (
           <div className="rounded-[var(--cuerate-r-md)] border border-red-500/30 bg-red-500/10 px-4 py-3 font-accent text-sm text-red-200">
@@ -241,123 +767,8 @@ export function Post() {
         )}
 
         <button
-          onClick={handleAutoFill}
-          disabled={isAutoFilling || !promptText}
-          className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-[var(--cuerate-r-pill)] bg-gradient-to-r from-[var(--cuerate-indigo)] to-[var(--cuerate-blue)] text-white font-accent font-medium indigo-glow hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isAutoFilling ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              Auto-filling with AI...
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-5 h-5" />
-              Auto-fill with AI
-            </>
-          )}
-        </button>
-
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Model
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {availableModels.map((model) => (
-              <button
-                key={model}
-                onClick={() => setSelectedModel(model)}
-                className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
-                  selectedModel === model
-                    ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-                    : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                }`}
-              >
-                {model}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Style Tags
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {availableStyleTags.map((tag) => (
-              <button
-                key={tag}
-                onClick={() => toggleTag(tag)}
-                className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
-                  selectedTags.includes(tag)
-                    ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-                    : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                }`}
-              >
-                #{tag}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Camera Notes
-          </label>
-          <input
-            type="text"
-            value={cameraNotes}
-            onChange={(event) => setCameraNotes(event.target.value)}
-            placeholder="anamorphic, wide angle, slow push-in..."
-            className="w-full px-4 py-3 rounded-[var(--cuerate-r-md)] glass-surface border border-[var(--cuerate-text-3)] focus:border-[var(--cuerate-indigo)] focus:indigo-glow outline-none font-accent text-sm text-[var(--cuerate-text-1)] placeholder:text-[var(--cuerate-text-2)] transition-all"
-          />
-        </div>
-
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Mood
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {availableMoodLabels.map((mood) => (
-              <button
-                key={mood}
-                onClick={() => setSelectedMood(mood)}
-                className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
-                  selectedMood === mood
-                    ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-                    : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                }`}
-              >
-                {mood}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-            Difficulty
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {difficultyLevels.map((level) => (
-              <button
-                key={level}
-                onClick={() => setSelectedDifficulty(level)}
-                className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
-                  selectedDifficulty === level
-                    ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-                    : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                }`}
-              >
-                {level}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <button
           onClick={() => void handlePublish()}
-          disabled={!promptText.trim() || !selectedModel || isPublishing}
+          disabled={isPublishing || (postMode === 'workflow' ? !workflowCanPublish : !promptCanPublish)}
           className="w-full py-4 rounded-[var(--cuerate-r-pill)] bg-gradient-to-r from-[#5500cc] to-[var(--cuerate-blue)] text-white font-accent font-medium text-lg indigo-glow hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isPublishing ? (
@@ -365,8 +776,10 @@ export function Post() {
               <Loader2 className="w-5 h-5 animate-spin" />
               Publishing...
             </span>
+          ) : postMode === 'workflow' ? (
+            'Publish Workflow'
           ) : (
-            'Publish to Cuerate'
+            'Publish Prompt'
           )}
         </button>
       </div>

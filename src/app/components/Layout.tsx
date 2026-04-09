@@ -1,26 +1,26 @@
 import { Outlet, useLocation, useNavigate } from 'react-router';
-import { Home, Compass, PlusCircle, Bookmark, User, Bell, Settings, Plus } from 'lucide-react';
+import { Home, Compass, PlusCircle, User, Bell, Settings, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../../lib/auth-context';
+import { truncateText } from '../../lib/text';
 
 export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [hasUnreadNotifications] = useState(true);
   const { user, signOut } = useAuth();
+  const displayHandle = user ? truncateText(user.handle, 16) : null;
 
   const navItems = [
     { path: '/', icon: Home, label: 'Feed' },
     { path: '/explore', icon: Compass, label: 'Explore' },
     { path: '/post', icon: PlusCircle, label: 'Post' },
-    { path: '/saves', icon: Bookmark, label: 'Saves' },
     { path: '/profile', icon: User, label: 'Profile' },
   ];
 
   const desktopNavItems = [
     { path: '/', icon: Home, label: 'Feed' },
     { path: '/explore', icon: Compass, label: 'Explore' },
-    { path: '/saves', icon: Bookmark, label: 'Saves' },
     { path: '/profile', icon: User, label: 'Profile' },
   ];
 
@@ -32,7 +32,7 @@ export function Layout() {
   };
 
   const navigateWithAuth = (path: string) => {
-    const requiresAuth = ['/post', '/saves', '/profile'];
+    const requiresAuth = ['/post', '/profile'];
     if (!user && requiresAuth.includes(path)) {
       navigate('/auth');
       return;
@@ -91,7 +91,9 @@ export function Layout() {
               className="w-full flex items-center gap-4 px-4 py-3 rounded-[var(--cuerate-r-md)] text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)] hover:bg-[var(--cuerate-surface)] transition-all"
             >
               <User className="w-6 h-6" />
-              <span className="text-base font-accent">{user ? `@${user.handle}` : 'Log In / Sign Up'}</span>
+              <span className="max-w-[160px] truncate text-base font-accent" title={user ? `@${user.handle}` : 'Log In / Sign Up'}>
+                {displayHandle ? `@${displayHandle}` : 'Log In / Sign Up'}
+              </span>
             </button>
             <button
               onClick={() => navigate('/notifications')}

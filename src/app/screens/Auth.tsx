@@ -10,12 +10,13 @@ export function Auth() {
   const location = useLocation();
   const { user, sendEmailLink, completeEmailLinkSignIn, signInWithGoogle } = useAuth();
   const [mode, setMode] = useState<AuthMode>('login');
-  const [displayName, setDisplayName] = useState('');
-  const [handle, setHandle] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isEmailSubmitting, setIsEmailSubmitting] = useState(false);
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
+  const [isCompletingEmailLink, setIsCompletingEmailLink] = useState(false);
   const [awaitingEmailLink, setAwaitingEmailLink] = useState(false);
 
   const title = useMemo(
@@ -34,7 +35,7 @@ export function Auth() {
       return;
     }
 
-    setIsSubmitting(true);
+    setIsCompletingEmailLink(true);
     setError(null);
     setStatusMessage('Finishing your email link sign-in...');
 
@@ -50,7 +51,7 @@ export function Auth() {
         setError(err instanceof Error ? err.message : 'Could not complete email link sign-in.');
       })
       .finally(() => {
-        setIsSubmitting(false);
+        setIsCompletingEmailLink(false);
       });
   }, [completeEmailLinkSignIn, location.search, navigate]);
 
@@ -58,14 +59,13 @@ export function Auth() {
     event.preventDefault();
     setError(null);
     setStatusMessage(null);
-    setIsSubmitting(true);
+    setIsEmailSubmitting(true);
 
     try {
       await sendEmailLink({
         mode,
         email,
-        displayName,
-        handle,
+        handle: username,
       });
 
       setAwaitingEmailLink(true);
@@ -77,7 +77,7 @@ export function Auth() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send your sign-in link.');
     } finally {
-      setIsSubmitting(false);
+      setIsEmailSubmitting(false);
     }
   };
 
@@ -94,9 +94,9 @@ export function Auth() {
               {title}
             </h1>
             <p className="mt-2 font-accent text-sm text-[var(--cuerate-text-2)]">
-              {mode === 'login'
+            {mode === 'login'
                 ? 'Log in with Google or a secure email link.'
-                : 'Create your account with Google or a secure email link.'}
+                : 'Create your account with a username, Google, or a secure email link.'}
             </p>
           </div>
 
@@ -139,32 +139,18 @@ export function Auth() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'signup' && (
-              <>
-                <div>
-                  <label className="mb-2 block font-accent text-sm text-[var(--cuerate-text-2)]">
-                    Display Name
-                  </label>
-                  <input
-                    value={displayName}
-                    onChange={(event) => setDisplayName(event.target.value)}
-                    placeholder="Alex Chen"
-                    className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
-                    required
-                  />
-                </div>
                 <div>
                   <label className="mb-2 block font-accent text-sm text-[var(--cuerate-text-2)]">
                     Username
                   </label>
                   <input
-                    value={handle}
-                    onChange={(event) => setHandle(event.target.value)}
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
                     placeholder="alexchen"
                     className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
                     required
                   />
                 </div>
-              </>
             )}
 
             <div>
@@ -195,10 +181,10 @@ export function Auth() {
 
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isEmailSubmitting || isCompletingEmailLink}
               className="w-full rounded-[var(--cuerate-r-pill)] bg-gradient-to-r from-[var(--cuerate-indigo)] to-[var(--cuerate-blue)] px-4 py-3 font-accent text-sm font-medium text-white indigo-glow hover:opacity-90 transition-opacity disabled:opacity-60"
             >
-              {isSubmitting ? (
+              {isEmailSubmitting || isCompletingEmailLink ? (
                 <span className="inline-flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Sending link...
@@ -221,16 +207,23 @@ export function Auth() {
             onClick={() => {
               setError(null);
               setStatusMessage(null);
-              setIsSubmitting(true);
+              setIsGoogleSubmitting(true);
               void signInWithGoogle()
                 .then(() => navigate('/'))
                 .catch((err) => setError(err instanceof Error ? err.message : 'Google sign-in failed.'))
-                .finally(() => setIsSubmitting(false));
+                .finally(() => setIsGoogleSubmitting(false));
             }}
-            disabled={isSubmitting}
+            disabled={isGoogleSubmitting || isCompletingEmailLink}
             className="w-full rounded-[var(--cuerate-r-pill)] border border-[var(--cuerate-text-3)] bg-white px-4 py-3 font-accent text-sm font-medium text-[#202124] hover:bg-[#f6f7f8] disabled:opacity-60"
           >
-            Continue with Google
+            {isGoogleSubmitting ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Continuing with Google...
+              </span>
+            ) : (
+              'Continue with Google'
+            )}
           </button>
 
           <p className="mt-6 text-center font-accent text-sm text-[var(--cuerate-text-2)]">

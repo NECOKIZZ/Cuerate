@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Bell, Settings, Image, Video, Filter, ChevronDown } from 'lucide-react';
+import { Bell, Settings, Image, Video, Filter, ChevronDown, Check } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { PromptCard } from '../components/PromptCard';
+import { WorkflowCard } from '../components/WorkflowCard';
 import { ForkPromptModal } from '../components/ForkPromptModal';
-import { authApi, metaApi, promptsApi } from '../../lib/backend';
+import { authApi, followsApi, metaApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
+import { createVideoThumbnailFile, detectImageFileDimensions, detectVideoFileDimensions } from '../../lib/media';
 import { useBackendQuery } from '../../lib/useBackendQuery';
-import { Prompt } from '../../lib/types';
+import { Prompt, Workflow } from '../../lib/types';
+import { truncateText } from '../../lib/text';
 
 export function Feed() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [activeFilter, setActiveFilter] = useState('All');
+  const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
   const [contentType, setContentType] = useState<'all' | 'image' | 'video'>('all');
   const [hasUnreadNotifications] = useState(true);
   const [followedUsers, setFollowedUsers] = useState<Set<string>>(new Set());
@@ -21,8 +24,13 @@ export function Feed() {
   const [forkModalPrompt, setForkModalPrompt] = useState<Prompt | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [promptOverrides, setPromptOverrides] = useState<Record<string, Prompt>>({});
+  const [localCreatedPrompts, setLocalCreatedPrompts] = useState<Prompt[]>([]);
+  const [workflowOverrides, setWorkflowOverrides] = useState<Record<string, Workflow>>({});
+  const [likedWorkflows, setLikedWorkflows] = useState<Set<string>>(new Set());
+  const [savedWorkflows, setSavedWorkflows] = useState<Set<string>>(new Set());
 
   const { data: prompts } = useBackendQuery(() => promptsApi.getFeedPrompts(), [], []);
+  const { data: workflows } = useBackendQuery(() => workflowsApi.getFeedWorkflows(), [], []);
   const { data: availableModels } = useBackendQuery(() => metaApi.getAvailableModels(), [], []);
   const { data: availableStyleTags } = useBackendQuery(() => metaApi.getAvailableStyleTags(), [], []);
   const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
@@ -32,24 +40,137 @@ export function Feed() {
     [],
     [activeUser?.uid],
   );
+  const { data: savedPromptIds } = useBackendQuery(
+    () => (activeUser ? promptsApi.getSavedPromptIds(activeUser.uid) : Promise.resolve([])),
+    [],
+    [activeUser?.uid],
+  );
+  const { data: followingUserIds } = useBackendQuery(
+    () => (activeUser ? followsApi.getFollowingUserIds(activeUser.uid) : Promise.resolve([])),
+    [],
+    [activeUser?.uid],
+  );
+  const { data: likedWorkflowIds } = useBackendQuery(
+    () => (activeUser ? workflowsApi.getLikedWorkflowIds(activeUser.uid) : Promise.resolve([])),
+    [],
+    [activeUser?.uid],
+  );
+  const { data: savedWorkflowIds } = useBackendQuery(
+    () => (activeUser ? workflowsApi.getSavedWorkflowIds(activeUser.uid) : Promise.resolve([])),
+    [],
+    [activeUser?.uid],
+  );
 
-  const hydratedPrompts = prompts.map((prompt) => promptOverrides[prompt.id] ?? prompt);
+  const hydratedPrompts = (() => {
+    const merged = [...localCreatedPrompts, ...prompts.map((prompt) => promptOverrides[prompt.id] ?? prompt)];
+    const uniqueById = new Map<string, Prompt>();
+    for (const prompt of merged) {
+      if (!uniqueById.has(prompt.id)) {
+        uniqueById.set(prompt.id, prompt);
+      }
+    }
+    return Array.from(uniqueById.values());
+  })();
+  const hydratedWorkflows = workflows.map((workflow) => workflowOverrides[workflow.id] ?? workflow);
 
-  const filters = ['All', ...availableModels, ...availableStyleTags.slice(0, 4)];
+  const filters = ['All', 'Workflow', ...availableModels, ...availableStyleTags.slice(0, 4)];
+
+  const isFilterSelected = (filter: string) =>
+    filter === 'All' ? selectedFilters.size === 0 : selectedFilters.has(filter);
+
+  const toggleFilter = (filter: string) => {
+    if (filter === 'All') {
+      setSelectedFilters(new Set());
+      return;
+    }
+
+    setSelectedFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(filter)) {
+        next.delete(filter);
+      } else {
+        next.add(filter);
+      }
+      return next;
+    });
+  };
+
+  const selectedFilterCount = selectedFilters.size;
+  const selectedFilterLabel =
+    selectedFilterCount === 0
+      ? 'All'
+      : selectedFilterCount === 1
+        ? Array.from(selectedFilters)[0]
+        : `${selectedFilterCount} filters`;
+  const displayNavHandle = activeUser ? truncateText(activeUser.handle, 14) : null;
+
+  const hasWorkflowFilter = selectedFilters.has('Workflow');
+  const activeNonWorkflowFilters = Array.from(selectedFilters).filter(
+    (entry) => entry !== 'Workflow',
+  );
 
   useEffect(() => {
     setLikedPrompts(new Set(likedPromptIds));
   }, [likedPromptIds]);
 
-  const handleFollow = (authorHandle: string) => {
+  useEffect(() => {
+    setSavedPrompts(new Set(savedPromptIds));
+  }, [savedPromptIds]);
+
+  useEffect(() => {
+    setFollowedUsers(new Set(followingUserIds));
+  }, [followingUserIds]);
+
+  useEffect(() => {
+    setLikedWorkflows(new Set(likedWorkflowIds));
+  }, [likedWorkflowIds]);
+
+  useEffect(() => {
+    setSavedWorkflows(new Set(savedWorkflowIds));
+  }, [savedWorkflowIds]);
+
+  const handleFollow = (authorUid: string) => {
+    if (!activeUser) {
+      navigate('/auth');
+      return;
+    }
+
+    if (authorUid === activeUser.uid) {
+      return;
+    }
+
+    const wasFollowing = followedUsers.has(authorUid);
     setFollowedUsers((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(authorHandle)) {
-        newSet.delete(authorHandle);
+      const next = new Set(prev);
+      if (wasFollowing) {
+        next.delete(authorUid);
       } else {
-        newSet.add(authorHandle);
+        next.add(authorUid);
       }
-      return newSet;
+      return next;
+    });
+
+    void followsApi.toggleFollow(activeUser.uid, authorUid).then((result) => {
+      setFollowedUsers((prev) => {
+        const next = new Set(prev);
+        if (result.following) {
+          next.add(authorUid);
+        } else {
+          next.delete(authorUid);
+        }
+        return next;
+      });
+    }).catch((error) => {
+      setFollowedUsers((prev) => {
+        const next = new Set(prev);
+        if (wasFollowing) {
+          next.add(authorUid);
+        } else {
+          next.delete(authorUid);
+        }
+        return next;
+      });
+      window.alert(error instanceof Error ? error.message : 'Could not update follow status.');
     });
   };
 
@@ -124,15 +245,73 @@ export function Feed() {
   };
 
   const handleSave = (promptId: string) => {
+    if (!activeUser) {
+      navigate('/auth');
+      return;
+    }
+
+    const targetPrompt = hydratedPrompts.find((entry) => entry.id === promptId);
+    if (!targetPrompt) {
+      return;
+    }
+
+    const wasSaved = savedPrompts.has(promptId);
+
     setSavedPrompts((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(promptId)) {
-        newSet.delete(promptId);
+      const next = new Set(prev);
+      if (wasSaved) {
+        next.delete(promptId);
       } else {
-        newSet.add(promptId);
+        next.add(promptId);
       }
-      return newSet;
+      return next;
     });
+
+    setPromptOverrides((prev) => ({
+      ...prev,
+      [promptId]: {
+        ...targetPrompt,
+        saves: Math.max(0, targetPrompt.saves + (wasSaved ? -1 : 1)),
+      },
+    }));
+
+    void promptsApi
+      .toggleSave(promptId, activeUser.uid)
+      .then((result) => {
+        setSavedPrompts((prev) => {
+          const next = new Set(prev);
+          if (result.saved) {
+            next.add(promptId);
+          } else {
+            next.delete(promptId);
+          }
+          return next;
+        });
+
+        setPromptOverrides((prev) => ({
+          ...prev,
+          [promptId]: {
+            ...(prev[promptId] ?? targetPrompt),
+            saves: result.saves,
+          },
+        }));
+      })
+      .catch(() => {
+        setSavedPrompts((prev) => {
+          const next = new Set(prev);
+          if (wasSaved) {
+            next.add(promptId);
+          } else {
+            next.delete(promptId);
+          }
+          return next;
+        });
+
+        setPromptOverrides((prev) => ({
+          ...prev,
+          [promptId]: targetPrompt,
+        }));
+      });
   };
 
   const handleFork = (promptId: string) => {
@@ -158,17 +337,197 @@ export function Feed() {
     }, 2000);
   };
 
+  const handleWorkflowLike = (workflowId: string) => {
+    if (!activeUser) {
+      navigate('/auth');
+      return;
+    }
+
+    const targetWorkflow = hydratedWorkflows.find((entry) => entry.id === workflowId);
+    if (!targetWorkflow) {
+      return;
+    }
+
+    const wasLiked = likedWorkflows.has(workflowId);
+
+    setLikedWorkflows((prev) => {
+      const next = new Set(prev);
+      if (wasLiked) {
+        next.delete(workflowId);
+      } else {
+        next.add(workflowId);
+      }
+      return next;
+    });
+
+    setWorkflowOverrides((prev) => ({
+      ...prev,
+      [workflowId]: {
+        ...targetWorkflow,
+        likes: Math.max(0, targetWorkflow.likes + (wasLiked ? -1 : 1)),
+      },
+    }));
+
+    void workflowsApi
+      .toggleLike(workflowId, activeUser.uid)
+      .then((result) => {
+        setLikedWorkflows((prev) => {
+          const next = new Set(prev);
+          if (result.liked) {
+            next.add(workflowId);
+          } else {
+            next.delete(workflowId);
+          }
+          return next;
+        });
+
+        setWorkflowOverrides((prev) => ({
+          ...prev,
+          [workflowId]: {
+            ...(prev[workflowId] ?? targetWorkflow),
+            likes: result.likes,
+          },
+        }));
+      })
+      .catch(() => {
+        setLikedWorkflows((prev) => {
+          const next = new Set(prev);
+          if (wasLiked) {
+            next.add(workflowId);
+          } else {
+            next.delete(workflowId);
+          }
+          return next;
+        });
+
+        setWorkflowOverrides((prev) => ({
+          ...prev,
+          [workflowId]: targetWorkflow,
+        }));
+      });
+  };
+
+  const handleWorkflowSave = (workflowId: string) => {
+    if (!activeUser) {
+      navigate('/auth');
+      return;
+    }
+
+    const targetWorkflow = hydratedWorkflows.find((entry) => entry.id === workflowId);
+    if (!targetWorkflow) {
+      return;
+    }
+
+    const wasSaved = savedWorkflows.has(workflowId);
+
+    setSavedWorkflows((prev) => {
+      const next = new Set(prev);
+      if (wasSaved) {
+        next.delete(workflowId);
+      } else {
+        next.add(workflowId);
+      }
+      return next;
+    });
+
+    setWorkflowOverrides((prev) => ({
+      ...prev,
+      [workflowId]: {
+        ...targetWorkflow,
+        saves: Math.max(0, targetWorkflow.saves + (wasSaved ? -1 : 1)),
+      },
+    }));
+
+    void workflowsApi
+      .toggleSave(workflowId, activeUser.uid)
+      .then((result) => {
+        setSavedWorkflows((prev) => {
+          const next = new Set(prev);
+          if (result.saved) {
+            next.add(workflowId);
+          } else {
+            next.delete(workflowId);
+          }
+          return next;
+        });
+
+        setWorkflowOverrides((prev) => ({
+          ...prev,
+          [workflowId]: {
+            ...(prev[workflowId] ?? targetWorkflow),
+            saves: result.saves,
+          },
+        }));
+      })
+      .catch(() => {
+        setSavedWorkflows((prev) => {
+          const next = new Set(prev);
+          if (wasSaved) {
+            next.add(workflowId);
+          } else {
+            next.delete(workflowId);
+          }
+          return next;
+        });
+
+        setWorkflowOverrides((prev) => ({
+          ...prev,
+          [workflowId]: targetWorkflow,
+        }));
+      });
+  };
+
   const filteredPrompts = hydratedPrompts.filter((prompt) => {
+    if (hasWorkflowFilter) {
+      return false;
+    }
+
     if (contentType !== 'all' && prompt.contentType !== contentType) {
       return false;
     }
 
-    if (activeFilter === 'All') {
+    if (activeNonWorkflowFilters.length === 0) {
       return true;
     }
 
-    return prompt.model === activeFilter || prompt.styleTags.includes(activeFilter.toLowerCase());
+    return activeNonWorkflowFilters.some(
+      (filter) => prompt.model === filter || prompt.styleTags.includes(filter.toLowerCase()),
+    );
   });
+
+  const filteredWorkflows = hydratedWorkflows.filter((workflow) => {
+    if (contentType !== 'all') {
+      return false;
+    }
+
+    if (activeNonWorkflowFilters.length === 0) {
+      return true;
+    }
+
+    return activeNonWorkflowFilters.some(
+      (filter) =>
+        workflow.tool === filter ||
+        workflow.tags.includes(filter.toLowerCase()),
+    );
+  });
+
+  const feedItems: Array<
+    | { id: string; kind: 'prompt'; createdAt: Date; prompt: Prompt }
+    | { id: string; kind: 'workflow'; createdAt: Date; workflow: Workflow }
+  > = [
+    ...filteredPrompts.map((prompt) => ({
+      id: `prompt-${prompt.id}`,
+      kind: 'prompt' as const,
+      createdAt: prompt.createdAt,
+      prompt,
+    })),
+    ...filteredWorkflows.map((workflow) => ({
+      id: `workflow-${workflow.id}`,
+      kind: 'workflow' as const,
+      createdAt: workflow.createdAt,
+      workflow,
+    })),
+  ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   return (
     <div className="min-h-screen">
@@ -196,9 +555,9 @@ export function Feed() {
             {filters.map((filter) => (
               <button
                 key={filter}
-                onClick={() => setActiveFilter(filter)}
+                onClick={() => toggleFilter(filter)}
                 className={`px-3 sm:px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-xs sm:text-sm whitespace-nowrap transition-all ${
-                  activeFilter === filter
+                  isFilterSelected(filter)
                     ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
                     : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
                 }`}
@@ -254,26 +613,30 @@ export function Feed() {
                 className="flex items-center gap-2 px-5 py-2 rounded-[var(--cuerate-r-pill)] glass-surface text-[var(--cuerate-text-1)] hover:text-white transition-all"
               >
                 <Filter className="w-4 h-4" />
-                <span className="font-accent text-sm font-medium">{activeFilter}</span>
+                <span className="font-accent text-sm font-medium">{selectedFilterLabel}</span>
                 <ChevronDown className={`w-4 h-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
               </button>
 
               {showFilters && (
                 <div className="absolute top-full left-0 mt-2 w-48 bg-[var(--cuerate-bg)] rounded-[var(--cuerate-r-lg)] border border-[var(--cuerate-text-3)] shadow-xl z-50">
+                  <button
+                    onClick={() => setSelectedFilters(new Set())}
+                    className="w-full text-left px-4 py-2.5 font-accent text-xs text-[var(--cuerate-blue)] hover:bg-[var(--cuerate-surface)] border-b border-[var(--cuerate-text-3)]"
+                  >
+                    Clear all
+                  </button>
                   {filters.map((filter) => (
                     <button
                       key={filter}
-                      onClick={() => {
-                        setActiveFilter(filter);
-                        setShowFilters(false);
-                      }}
-                      className={`w-full text-left px-4 py-2.5 font-accent text-sm transition-all first:rounded-t-[var(--cuerate-r-lg)] last:rounded-b-[var(--cuerate-r-lg)] ${
-                        activeFilter === filter
+                      onClick={() => toggleFilter(filter)}
+                      className={`w-full text-left px-4 py-2.5 font-accent text-sm transition-all last:rounded-b-[var(--cuerate-r-lg)] flex items-center justify-between ${
+                        isFilterSelected(filter)
                           ? 'bg-[var(--cuerate-indigo)] text-white'
                           : 'text-[var(--cuerate-text-2)] hover:text-white hover:bg-[var(--cuerate-surface)]'
                       }`}
                     >
-                      {filter}
+                      <span>{filter}</span>
+                      {isFilterSelected(filter) && <Check className="w-3.5 h-3.5" />}
                     </button>
                   ))}
                 </div>
@@ -320,10 +683,11 @@ export function Feed() {
             </div>
 
             <button
-              onClick={() => navigate(user ? '/profile' : '/auth')}
-              className="px-6 py-2 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)] text-white font-accent text-sm font-medium indigo-glow hover:opacity-90 transition-all"
+              onClick={() => navigate(activeUser ? '/profile' : '/auth')}
+              className="max-w-[180px] truncate px-6 py-2 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)] text-white font-accent text-sm font-medium indigo-glow hover:opacity-90 transition-all"
+              title={activeUser ? `@${activeUser.handle}` : 'Login'}
             >
-              {user ? `@${user.handle}` : 'Login'}
+              {displayNavHandle ? `@${displayNavHandle}` : 'Login'}
             </button>
           </div>
         </div>
@@ -331,22 +695,34 @@ export function Feed() {
 
       <div className="px-3 sm:px-4 md:px-8 py-3 sm:py-4 md:py-6">
         <div className="prompt-grid">
-          {filteredPrompts.map((prompt) => (
-            <PromptCard
-              key={prompt.id}
-              prompt={prompt}
-              onFollow={handleFollow}
-              isFollowing={followedUsers.has(prompt.authorHandle)}
-              onLike={handleLike}
-              isLiked={likedPrompts.has(prompt.id)}
-              onSave={handleSave}
-              isSaved={savedPrompts.has(prompt.id)}
-              onFork={handleFork}
-              isForked={false}
-              onCopy={handleCopy}
-              isCopied={copiedPrompts.has(prompt.id)}
-            />
-          ))}
+          {feedItems.map((item) =>
+            item.kind === 'prompt' ? (
+              <PromptCard
+                key={item.id}
+                prompt={item.prompt}
+                onFollow={handleFollow}
+                isFollowing={followedUsers.has(item.prompt.authorUid)}
+                showFollowButton={!(activeUser && item.prompt.authorUid === activeUser.uid)}
+                onLike={handleLike}
+                isLiked={likedPrompts.has(item.prompt.id)}
+                onSave={handleSave}
+                isSaved={savedPrompts.has(item.prompt.id)}
+                onFork={handleFork}
+                isForked={false}
+                onCopy={handleCopy}
+                isCopied={copiedPrompts.has(item.prompt.id)}
+              />
+            ) : (
+              <WorkflowCard
+                key={item.id}
+                workflow={item.workflow}
+                onLike={handleWorkflowLike}
+                isLiked={likedWorkflows.has(item.workflow.id)}
+                onSave={handleWorkflowSave}
+                isSaved={savedWorkflows.has(item.workflow.id)}
+              />
+            ),
+          )}
         </div>
       </div>
 
@@ -354,19 +730,72 @@ export function Feed() {
         <ForkPromptModal
           prompt={forkModalPrompt}
           onClose={() => setForkModalPrompt(null)}
-          onSave={(forkedPrompt) => {
+          onSave={async ({ forkedPrompt, mediaFile }) => {
             if (!activeUser) {
+              navigate('/auth');
               return;
             }
 
-            void promptsApi.forkPrompt({
+            let uploadedVideoUrl: string | undefined;
+            let uploadedThumbnailUrl: string | undefined;
+            let mediaWidth: number | undefined;
+            let mediaHeight: number | undefined;
+            let aspectRatio: 'portrait' | 'landscape' | undefined;
+
+            if (mediaFile) {
+              if (forkModalPrompt.contentType === 'video') {
+                if (!mediaFile.type.startsWith('video/')) {
+                  throw new Error('This fork requires a video file.');
+                }
+
+                const dimensions = await detectVideoFileDimensions(mediaFile);
+                mediaWidth = dimensions.width;
+                mediaHeight = dimensions.height;
+                aspectRatio = dimensions.height > dimensions.width ? 'portrait' : 'landscape';
+
+                const uploadedVideo = await uploadsApi.uploadPromptMedia(mediaFile, activeUser.uid);
+                const thumbnailFile = await createVideoThumbnailFile(mediaFile);
+                const uploadedThumbnail = await uploadsApi.uploadPromptMedia(thumbnailFile, activeUser.uid);
+                uploadedVideoUrl = uploadedVideo.downloadUrl;
+                uploadedThumbnailUrl = uploadedThumbnail.downloadUrl;
+              } else {
+                if (!mediaFile.type.startsWith('image/')) {
+                  throw new Error('This fork requires an image file.');
+                }
+
+                const dimensions = await detectImageFileDimensions(mediaFile);
+                mediaWidth = dimensions.width;
+                mediaHeight = dimensions.height;
+                aspectRatio = dimensions.height > dimensions.width ? 'portrait' : 'landscape';
+
+                const uploadedImage = await uploadsApi.uploadPromptMedia(mediaFile, activeUser.uid);
+                uploadedVideoUrl = '';
+                uploadedThumbnailUrl = uploadedImage.downloadUrl;
+              }
+            }
+
+            const createdFork = await promptsApi.forkPrompt({
               sourcePromptId: forkModalPrompt.id,
               authorUid: activeUser.uid,
               promptText: forkedPrompt.promptText ?? forkModalPrompt.promptText,
               model: forkedPrompt.model ?? forkModalPrompt.model,
               styleTags: forkedPrompt.styleTags ?? forkModalPrompt.styleTags,
               moodLabel: forkedPrompt.moodLabel ?? forkModalPrompt.moodLabel,
+              videoUrl: uploadedVideoUrl,
+              thumbnailUrl: uploadedThumbnailUrl,
+              mediaWidth,
+              mediaHeight,
+              aspectRatio,
             });
+
+            setLocalCreatedPrompts((prev) => [createdFork, ...prev.filter((entry) => entry.id !== createdFork.id)]);
+            setPromptOverrides((prev) => ({
+              ...prev,
+              [forkModalPrompt.id]: {
+                ...forkModalPrompt,
+                forks: forkModalPrompt.forks + 1,
+              },
+            }));
           }}
         />
       )}

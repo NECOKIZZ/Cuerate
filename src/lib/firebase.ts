@@ -25,7 +25,18 @@ export const firebaseConfig: FirebaseOptions = {
   appId: readEnv('VITE_FIREBASE_APP_ID', 'NEXT_PUBLIC_FIREBASE_APP_ID'),
 };
 
-export const firebaseEnabled = Object.values(firebaseConfig).every(
+const firebaseCoreConfig = [
+  firebaseConfig.apiKey,
+  firebaseConfig.authDomain,
+  firebaseConfig.projectId,
+  firebaseConfig.appId,
+];
+
+const firebaseStorageConfigured =
+  typeof firebaseConfig.storageBucket === 'string' &&
+  firebaseConfig.storageBucket.trim().length > 0;
+
+export const firebaseEnabled = firebaseCoreConfig.every(
   (value) => typeof value === 'string' && value.trim().length > 0,
 );
 
@@ -35,7 +46,8 @@ export const app: FirebaseApp | null = firebaseEnabled
 
 export const auth: Auth | null = app ? getAuth(app) : null;
 export const db: Firestore | null = app ? getFirestore(app) : null;
-export const storage: FirebaseStorage | null = app ? getStorage(app) : null;
+export const storage: FirebaseStorage | null =
+  app && firebaseStorageConfigured ? getStorage(app) : null;
 
 const useEmulators =
   Boolean(app) &&

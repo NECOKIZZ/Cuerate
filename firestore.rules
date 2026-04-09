@@ -39,13 +39,84 @@ service cloud.firestore {
         );
     }
 
+    function isPromptSaveCounterUpdate() {
+      return isSignedIn()
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.authorHandle == resource.data.authorHandle
+        && request.resource.data.authorAvatar == resource.data.authorAvatar
+        && request.resource.data.videoUrl == resource.data.videoUrl
+        && request.resource.data.thumbnailUrl == resource.data.thumbnailUrl
+        && request.resource.data.promptText == resource.data.promptText
+        && request.resource.data.model == resource.data.model
+        && request.resource.data.contentType == resource.data.contentType
+        && request.resource.data.aspectRatio == resource.data.aspectRatio
+        && request.resource.data.styleTags == resource.data.styleTags
+        && request.resource.data.cameraNotes == resource.data.cameraNotes
+        && request.resource.data.moodLabel == resource.data.moodLabel
+        && request.resource.data.difficulty == resource.data.difficulty
+        && request.resource.data.likes == resource.data.likes
+        && request.resource.data.copies == resource.data.copies
+        && request.resource.data.forks == resource.data.forks
+        && request.resource.data.isForked == resource.data.isForked
+        && request.resource.data.forkedFromId == resource.data.forkedFromId
+        && request.resource.data.forkedFromAuthorHandle == resource.data.forkedFromAuthorHandle
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.mediaWidth == resource.data.mediaWidth
+        && request.resource.data.mediaHeight == resource.data.mediaHeight
+        && (
+          request.resource.data.saves == resource.data.saves + 1
+          || request.resource.data.saves == resource.data.saves - 1
+        );
+    }
+
+    function isPromptAuthor(promptId) {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/prompts/$(promptId)).data.authorUid == request.auth.uid;
+    }
+
+    function isWorkflowCounterUpdate() {
+      return isSignedIn()
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.authorHandle == resource.data.authorHandle
+        && request.resource.data.authorAvatar == resource.data.authorAvatar
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.tool == resource.data.tool
+        && request.resource.data.description == resource.data.description
+        && request.resource.data.coverVideoUrl == resource.data.coverVideoUrl
+        && request.resource.data.coverThumbnailUrl == resource.data.coverThumbnailUrl
+        && request.resource.data.tags == resource.data.tags
+        && request.resource.data.stepCount == resource.data.stepCount
+        && request.resource.data.mediaAspectRatio == resource.data.mediaAspectRatio
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.steps == resource.data.steps
+        && (
+          (
+            request.resource.data.likes == resource.data.likes + 1
+            || request.resource.data.likes == resource.data.likes - 1
+          )
+          && request.resource.data.saves == resource.data.saves
+          || (
+            request.resource.data.saves == resource.data.saves + 1
+            || request.resource.data.saves == resource.data.saves - 1
+          )
+          && request.resource.data.likes == resource.data.likes
+        );
+    }
+
+    function isWorkflowAuthor(workflowId) {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/workflows/$(workflowId)).data.authorUid == request.auth.uid;
+    }
+
     match /users/{userId} {
       allow read: if true;
       allow create, update: if isOwner(userId);
     }
 
     match /authLogs/{logId} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow create: if 
+        (isSignedIn() && request.resource.data.userId == request.auth.uid) ||
+        (request.resource.data.event == 'email_link_sent');
       allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
@@ -61,12 +132,72 @@ service cloud.firestore {
         && (
           resource.data.authorUid == request.auth.uid
           || isPromptLikeCounterUpdate()
+          || isPromptSaveCounterUpdate()
         );
+      allow delete: if isSignedIn() && resource.data.authorUid == request.auth.uid;
+    }
+
+    match /workflows/{workflowId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow update: if isSignedIn()
+        && (
+          resource.data.authorUid == request.auth.uid
+          || isWorkflowCounterUpdate()
+        );
+      allow delete: if isSignedIn() && resource.data.authorUid == request.auth.uid;
     }
 
     match /promptLikes/{likeId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource == null
+        || resource.data.userId == request.auth.uid
+        || isPromptAuthor(resource.data.promptId)
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid
+        || isPromptAuthor(resource.data.promptId)
+      );
+    }
+
+    match /promptSaves/{saveId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource == null
+        || resource.data.userId == request.auth.uid
+        || isPromptAuthor(resource.data.promptId)
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid
+        || isPromptAuthor(resource.data.promptId)
+      );
+    }
+
+    match /workflowLikes/{likeId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource == null
+        || resource.data.userId == request.auth.uid
+        || isWorkflowAuthor(resource.data.workflowId)
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid
+        || isWorkflowAuthor(resource.data.workflowId)
+      );
+    }
+
+    match /workflowSaves/{saveId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource == null
+        || resource.data.userId == request.auth.uid
+        || isWorkflowAuthor(resource.data.workflowId)
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid
+        || isWorkflowAuthor(resource.data.workflowId)
+      );
     }
 
     match /notifications/{notificationId} {
@@ -78,6 +209,15 @@ service cloud.firestore {
       allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /userFollows/{followId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.followerUid == request.auth.uid
+        && request.resource.data.followingUid is string
+        && request.resource.data.followingUid != request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.followerUid == request.auth.uid;
     }
   }
 }

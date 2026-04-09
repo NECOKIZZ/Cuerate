@@ -1,10 +1,11 @@
-import { useState, useRef } from 'react';
-import { Heart, Bookmark, GitFork, Copy, Play, Check, Maximize2, X } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Heart, Bookmark, GitFork, Copy, Check, Play, Maximize2, X } from 'lucide-react';
 import { Prompt } from '../../lib/types';
 import { useNavigate } from 'react-router';
 import { formatDistanceToNow } from 'date-fns';
 import { getAIModelConfig } from '../../lib/aiModelLogos';
 import { motion, AnimatePresence } from 'motion/react';
+import { truncateText } from '../../lib/text';
 
 interface PromptCardProps {
   prompt: Prompt;
@@ -12,12 +13,13 @@ interface PromptCardProps {
   onSave?: (id: string) => void;
   onFork?: (id: string) => void;
   onCopy?: (id: string) => void;
-  onFollow?: (authorHandle: string) => void;
+  onFollow?: (authorUid: string) => void;
   isLiked?: boolean;
   isSaved?: boolean;
   isForked?: boolean;
   isCopied?: boolean;
   isFollowing?: boolean;
+  showFollowButton?: boolean;
 }
 
 export function PromptCard({
@@ -32,6 +34,7 @@ export function PromptCard({
   isForked: userHasForked = false,
   isCopied = false,
   isFollowing = false,
+  showFollowButton = true,
 }: PromptCardProps) {
   const navigate = useNavigate();
   const [copiedState, setCopiedState] = useState(isCopied);
@@ -40,8 +43,11 @@ export function PromptCard({
   const [isCardExpanded, setIsCardExpanded] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const expandedVideoRef = useRef<HTMLVideoElement>(null);
-  const cardExpandedVideoRef = useRef<HTMLVideoElement>(null);
   const aiModel = getAIModelConfig(prompt.model);
+  const displayAuthorHandle = truncateText(prompt.authorHandle, 18);
+  const displayForkedFromHandle = prompt.forkedFromAuthorHandle
+    ? truncateText(prompt.forkedFromAuthorHandle, 18)
+    : null;
   const mediaAspectRatio =
     prompt.mediaWidth && prompt.mediaHeight
       ? `${prompt.mediaWidth} / ${prompt.mediaHeight}`
@@ -85,17 +91,23 @@ export function PromptCard({
   };
 
   const handleMouseEnter = () => {
+    if (prompt.contentType !== 'video') {
+      return;
+    }
     setIsHovering(true);
-    if (videoRef.current && prompt.contentType === 'video') {
+    if (videoRef.current) {
       videoRef.current.play().catch(() => {
-        // Video play failed - probably using placeholder URL
+        // Ignore autoplay failures in muted hover previews.
       });
     }
   };
 
   const handleMouseLeave = () => {
+    if (prompt.contentType !== 'video') {
+      return;
+    }
     setIsHovering(false);
-    if (videoRef.current && prompt.contentType === 'video') {
+    if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
     }
@@ -111,12 +123,13 @@ export function PromptCard({
             alt={prompt.authorHandle}
             className="w-[34px] h-[34px] rounded-full border-2 border-[var(--cuerate-indigo)]"
           />
-          <div>
+          <div className="min-w-0">
             <button
               onClick={() => navigate(`/user/${prompt.authorHandle}`)}
-              className="font-primary font-medium text-[var(--cuerate-text-1)] hover:text-[var(--cuerate-indigo)] transition-colors"
+              className="max-w-[132px] truncate font-primary font-medium text-[var(--cuerate-text-1)] hover:text-[var(--cuerate-indigo)] transition-colors"
+              title={`@${prompt.authorHandle}`}
             >
-              {prompt.authorHandle}
+              @{displayAuthorHandle}
             </button>
             <div className="flex items-center gap-2">
               <span className="font-accent text-xs text-[var(--cuerate-text-2)]">
@@ -126,31 +139,36 @@ export function PromptCard({
             </div>
           </div>
         </div>
-        <button
-          onClick={() => onFollow?.(prompt.authorHandle)}
-          className={`px-4 py-1.5 rounded-[var(--cuerate-r-pill)] ${
-            isFollowing
-              ? 'bg-[var(--cuerate-indigo)]/10 text-[var(--cuerate-indigo)]'
-              : 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-          } font-accent text-xs font-medium transition-opacity hover:opacity-90`}
-        >
-          {isFollowing ? 'Following' : 'Follow'}
-        </button>
+        {showFollowButton && (
+          <button
+            onClick={() => onFollow?.(prompt.authorUid)}
+            className={`px-4 py-1.5 rounded-[var(--cuerate-r-pill)] ${
+              isFollowing
+                ? 'bg-[var(--cuerate-indigo)]/10 text-[var(--cuerate-indigo)]'
+                : 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+            } font-accent text-xs font-medium transition-opacity hover:opacity-90`}
+          >
+            {isFollowing ? 'Following' : 'Follow'}
+          </button>
+        )}
       </div>
 
       {/* Fork Attribution */}
       {prompt.isForked && prompt.forkedFromAuthorHandle && (
         <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-[var(--cuerate-r-md)] bg-[var(--cuerate-indigo)]/10">
           <GitFork className="w-3 h-3 text-[var(--cuerate-indigo)]" />
-          <span className="font-accent text-xs text-[var(--cuerate-indigo)]">
-            Forked from @{prompt.forkedFromAuthorHandle}
+          <span className="font-accent text-xs text-[var(--cuerate-indigo)]" title={`@${prompt.forkedFromAuthorHandle}`}>
+            Forked from @{displayForkedFromHandle}
           </span>
         </div>
       )}
 
-      {/* Video Thumbnail */}
+      {/* Media Thumbnail */}
       <button
         onClick={() => {
+          if (prompt.contentType !== 'video') {
+            return;
+          }
           setIsExpanded(true);
           setTimeout(() => {
             if (expandedVideoRef.current) {
@@ -158,19 +176,18 @@ export function PromptCard({
             }
           }, 100);
         }}
-        className="relative mb-3 rounded-[var(--cuerate-r-sm)] overflow-hidden group w-full cursor-pointer"
+        className="relative mb-3 rounded-[var(--cuerate-r-sm)] overflow-hidden group w-full cursor-pointer transition-transform duration-300 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_rgba(37,99,235,0.25)]"
         style={{
           aspectRatio: mediaAspectRatio
         }}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        {/* Video element for hover playback */}
         {prompt.contentType === 'video' && (
           <video
             ref={videoRef}
             src={prompt.videoUrl}
-            className="absolute inset-0 w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
             loop
             muted
             playsInline
@@ -181,20 +198,27 @@ export function PromptCard({
         {/* Thumbnail image */}
         <img
           src={prompt.thumbnailUrl}
-          alt="Video thumbnail"
-          className="w-full h-full object-cover"
+          alt="Prompt thumbnail"
+          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
           style={{ opacity: isHovering && prompt.contentType === 'video' ? 0 : 1 }}
         />
 
-        {/* Play button overlay (hidden on hover for videos) */}
-        <div
-          className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors pointer-events-none"
-          style={{ opacity: isHovering && prompt.contentType === 'video' ? 0 : 1 }}
-        >
-          <div className="w-16 h-16 rounded-full border-4 border-[var(--cuerate-blue)] flex items-center justify-center blue-glow">
-            <Play className="w-6 h-6 text-[var(--cuerate-blue)] fill-[var(--cuerate-blue)] ml-1" />
-          </div>
-        </div>
+        {prompt.contentType === 'video' && (
+          <>
+            <div
+              className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors pointer-events-none"
+              style={{ opacity: isHovering ? 0 : 1 }}
+            >
+              <div className="w-16 h-16 rounded-full border-4 border-[var(--cuerate-blue)] flex items-center justify-center blue-glow">
+                <Play className="w-6 h-6 text-[var(--cuerate-blue)] fill-[var(--cuerate-blue)] ml-1" />
+              </div>
+            </div>
+
+            <div className="absolute bottom-3 right-3 p-2 rounded-[var(--cuerate-r-pill)] glass-surface border border-white/20 pointer-events-none">
+              <Maximize2 className="w-4 h-4 text-[var(--cuerate-text-1)]" />
+            </div>
+          </>
+        )}
 
         {/* AI Model Logo Badge - TOP LEFT */}
         <div className="absolute top-2 sm:top-3 left-2 sm:left-3 h-5 sm:h-6 px-2 sm:px-2.5 rounded-[var(--cuerate-r-pill)] glass-surface border border-white/20 backdrop-blur-md flex items-center gap-1 sm:gap-1.5 pointer-events-none">
@@ -210,11 +234,6 @@ export function PromptCard({
         {/* Mood Label - BOTTOM LEFT */}
         <div className="absolute bottom-2 sm:bottom-3 left-2 sm:left-3 px-2 sm:px-3 py-1 sm:py-1.5 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-[10px] sm:text-xs text-[var(--cuerate-text-1)] pointer-events-none">
           {prompt.moodLabel}
-        </div>
-
-        {/* Expand Icon - BOTTOM RIGHT */}
-        <div className="absolute bottom-3 right-3 p-2 rounded-[var(--cuerate-r-pill)] glass-surface border border-white/20 pointer-events-none">
-          <Maximize2 className="w-4 h-4 text-[var(--cuerate-text-1)]" />
         </div>
       </button>
 
@@ -301,7 +320,7 @@ export function PromptCard({
 
       {/* Fullscreen Video Modal */}
       <AnimatePresence>
-        {isExpanded && (
+        {isExpanded && prompt.contentType === 'video' && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -315,7 +334,6 @@ export function PromptCard({
               }
             }}
           >
-            {/* Close Button */}
             <button
               onClick={() => {
                 setIsExpanded(false);
@@ -328,7 +346,6 @@ export function PromptCard({
               <X className="w-6 h-6 text-white" />
             </button>
 
-            {/* Video Container */}
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -336,12 +353,12 @@ export function PromptCard({
               transition={{ duration: 0.2 }}
               className="relative"
               style={{
-                ...(prompt.aspectRatio === 'portrait' 
+                ...(prompt.aspectRatio === 'portrait'
                   ? { height: '85vh', aspectRatio: '9/16' }
                   : { width: '90vw', maxWidth: '1536px', aspectRatio: '16/9' }
                 )
               }}
-              onClick={(e) => e.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
             >
               <video
                 ref={expandedVideoRef}
@@ -385,15 +402,16 @@ export function PromptCard({
                     alt={prompt.authorHandle}
                     className="w-10 h-10 rounded-full border-2 border-[var(--cuerate-indigo)]"
                   />
-                  <div>
+                  <div className="min-w-0">
                     <button
                       onClick={() => {
                         setIsCardExpanded(false);
                         navigate(`/user/${prompt.authorHandle}`);
                       }}
-                      className="font-primary font-bold text-base text-white hover:text-[var(--cuerate-indigo)] transition-colors"
+                      className="max-w-[164px] truncate font-primary font-bold text-base text-white hover:text-[var(--cuerate-indigo)] transition-colors"
+                      title={`@${prompt.authorHandle}`}
                     >
-                      {prompt.authorHandle}
+                      @{displayAuthorHandle}
                     </button>
                     <p className="font-accent text-xs text-[var(--cuerate-text-2)]">
                       {formatDistanceToNow(prompt.createdAt, { addSuffix: true })}
@@ -416,58 +434,84 @@ export function PromptCard({
                     <p className="font-accent text-xs text-[var(--cuerate-text-2)] mb-2">Forked from</p>
                     <div className="flex items-center gap-3">
                       <GitFork className="w-4 h-4 text-[var(--cuerate-indigo)]" />
-                      <p className="font-accent text-sm text-[var(--cuerate-indigo)]">
-                        @{prompt.forkedFromAuthorHandle}
+                      <p className="font-accent text-sm text-[var(--cuerate-indigo)]" title={`@${prompt.forkedFromAuthorHandle}`}>
+                        @{displayForkedFromHandle}
                       </p>
                     </div>
                   </div>
                 )}
 
-                {/* Video Thumbnail */}
-                <button
-                  onClick={() => {
-                    setIsCardExpanded(false);
-                    setIsExpanded(true);
-                    setTimeout(() => {
-                      if (expandedVideoRef.current) {
-                        expandedVideoRef.current.play().catch(() => {});
-                      }
-                    }, 100);
-                  }}
-                  className="relative w-full rounded-[var(--cuerate-r-lg)] overflow-hidden group cursor-pointer"
-                  style={{
-                    aspectRatio: mediaAspectRatio
-                  }}
-                >
-                  <img
-                    src={prompt.thumbnailUrl}
-                    alt="Video thumbnail"
-                    className="w-full h-full object-cover"
-                  />
+                {/* Media Thumbnail */}
+                {prompt.contentType === 'video' ? (
+                  <button
+                    onClick={() => {
+                      setIsCardExpanded(false);
+                      setIsExpanded(true);
+                      setTimeout(() => {
+                        if (expandedVideoRef.current) {
+                          expandedVideoRef.current.play().catch(() => {});
+                        }
+                      }, 100);
+                    }}
+                    className="relative w-full rounded-[var(--cuerate-r-lg)] overflow-hidden group cursor-pointer"
+                    style={{
+                      aspectRatio: mediaAspectRatio
+                    }}
+                  >
+                    <img
+                      src={prompt.thumbnailUrl}
+                      alt="Video thumbnail"
+                      className="w-full h-full object-cover"
+                    />
 
-                  {/* Play button overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors">
-                    <div className="w-16 h-16 rounded-full border-4 border-[var(--cuerate-blue)] flex items-center justify-center blue-glow">
-                      <Play className="w-6 h-6 text-[var(--cuerate-blue)] fill-[var(--cuerate-blue)] ml-1" />
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors">
+                      <div className="w-16 h-16 rounded-full border-4 border-[var(--cuerate-blue)] flex items-center justify-center blue-glow">
+                        <Play className="w-6 h-6 text-[var(--cuerate-blue)] fill-[var(--cuerate-blue)] ml-1" />
+                      </div>
+                    </div>
+
+                    <div className="absolute top-3 left-3 h-6 px-2.5 rounded-[var(--cuerate-r-pill)] glass-surface border border-white/20 backdrop-blur-md flex items-center gap-1.5 pointer-events-none">
+                      {aiModel.logoUrl ? (
+                        <img src={aiModel.logoUrl} alt={aiModel.name} className="h-4 w-auto" />
+                      ) : (
+                        <span className={`font-accent text-[10px] font-bold ${aiModel.color}`}>
+                          {aiModel.name}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-xs text-[var(--cuerate-text-1)] pointer-events-none">
+                      {prompt.moodLabel}
+                    </div>
+                  </button>
+                ) : (
+                  <div
+                    className="relative w-full rounded-[var(--cuerate-r-lg)] overflow-hidden"
+                    style={{
+                      aspectRatio: mediaAspectRatio
+                    }}
+                  >
+                    <img
+                      src={prompt.thumbnailUrl}
+                      alt="Image thumbnail"
+                      className="w-full h-full object-cover"
+                    />
+
+                    <div className="absolute top-3 left-3 h-6 px-2.5 rounded-[var(--cuerate-r-pill)] glass-surface border border-white/20 backdrop-blur-md flex items-center gap-1.5 pointer-events-none">
+                      {aiModel.logoUrl ? (
+                        <img src={aiModel.logoUrl} alt={aiModel.name} className="h-4 w-auto" />
+                      ) : (
+                        <span className={`font-accent text-[10px] font-bold ${aiModel.color}`}>
+                          {aiModel.name}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-xs text-[var(--cuerate-text-1)] pointer-events-none">
+                      {prompt.moodLabel}
                     </div>
                   </div>
-
-                  {/* AI Model Logo Badge */}
-                  <div className="absolute top-3 left-3 h-6 px-2.5 rounded-[var(--cuerate-r-pill)] glass-surface border border-white/20 backdrop-blur-md flex items-center gap-1.5 pointer-events-none">
-                    {aiModel.logoUrl ? (
-                      <img src={aiModel.logoUrl} alt={aiModel.name} className="h-4 w-auto" />
-                    ) : (
-                      <span className={`font-accent text-[10px] font-bold ${aiModel.color}`}>
-                        {aiModel.name}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Mood Label */}
-                  <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-xs text-[var(--cuerate-text-1)] pointer-events-none">
-                    {prompt.moodLabel}
-                  </div>
-                </button>
+                )}
 
                 {/* Full Prompt Text */}
                 <div>

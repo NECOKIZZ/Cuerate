@@ -3,6 +3,7 @@ import { Search } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { metaApi, usersApi } from '../../lib/backend';
 import { useBackendQuery } from '../../lib/useBackendQuery';
+import { truncateText } from '../../lib/text';
 
 export function Explore() {
   const navigate = useNavigate();
@@ -72,36 +73,41 @@ export function Explore() {
             Top Creators
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {topCreators.map((creator) => (
-              <div
-                key={creator.uid}
-                onClick={() => navigate(`/user/${creator.handle}`)}
-                className="flex items-center gap-4 p-4 rounded-[var(--cuerate-r-lg)] glass-surface card-top-edge hover:bg-[var(--cuerate-surface)] transition-colors cursor-pointer"
-              >
-                <div className="w-8 h-8 flex items-center justify-center rounded-full bg-[var(--cuerate-indigo)]/20 font-accent font-semibold text-sm text-[var(--cuerate-indigo)]">
-                  #{creator.rank}
+            {topCreators.map((creator) => {
+              const displayName = truncateText(creator.displayName, 24);
+              const displayHandle = truncateText(creator.handle, 18);
+
+              return (
+                <div
+                  key={creator.uid}
+                  onClick={() => navigate(`/user/${creator.handle}`)}
+                  className="flex items-center gap-4 p-4 rounded-[var(--cuerate-r-lg)] glass-surface card-top-edge hover:bg-[var(--cuerate-surface)] transition-colors cursor-pointer"
+                >
+                  <div className="w-8 h-8 flex items-center justify-center rounded-full bg-[var(--cuerate-indigo)]/20 font-accent font-semibold text-sm text-[var(--cuerate-indigo)]">
+                    #{creator.rank}
+                  </div>
+                  <img
+                    src={creator.avatarUrl}
+                    alt={creator.handle}
+                    className="w-12 h-12 rounded-full border-2 border-[var(--cuerate-indigo)]"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-primary font-medium text-[var(--cuerate-text-1)] truncate" title={creator.displayName}>
+                      {displayName}
+                    </p>
+                    <p className="font-accent text-sm text-[var(--cuerate-text-2)] truncate" title={`@${creator.handle}`}>
+                      @{displayHandle}
+                    </p>
+                    <p className="font-accent text-xs text-[var(--cuerate-indigo)] mt-1">
+                      {creator.totalCopies.toLocaleString()} prompts copied
+                    </p>
+                  </div>
+                  <button className="px-4 py-2 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)] text-white font-accent text-sm font-medium indigo-glow hover:opacity-90 transition-opacity">
+                    Follow
+                  </button>
                 </div>
-                <img
-                  src={creator.avatarUrl}
-                  alt={creator.handle}
-                  className="w-12 h-12 rounded-full border-2 border-[var(--cuerate-indigo)]"
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="font-primary font-medium text-[var(--cuerate-text-1)] truncate">
-                    {creator.displayName}
-                  </p>
-                  <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
-                    @{creator.handle}
-                  </p>
-                  <p className="font-accent text-xs text-[var(--cuerate-indigo)] mt-1">
-                    {creator.totalCopies.toLocaleString()} prompts copied
-                  </p>
-                </div>
-                <button className="px-4 py-2 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)] text-white font-accent text-sm font-medium indigo-glow hover:opacity-90 transition-opacity">
-                  Follow
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

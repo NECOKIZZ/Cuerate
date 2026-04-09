@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -24,8 +25,7 @@ import {
   signOut,
   User as FirebaseAuthUser,
 } from 'firebase/auth';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { auth, db, firebaseEnabled, storage } from './firebase';
+import { auth, db, firebaseEnabled } from './firebase';
 import {
   AuthLog,
   AuthLogEvent,
@@ -40,8 +40,11 @@ import {
   Prompt,
   PromptCreateInput,
   User,
+  Workflow,
+  WorkflowCreateInput,
 } from './types';
-import { mockCollections, mockNotifications, mockPrompts, mockUsers } from './mockData';
+import { mockCollections, mockNotifications, mockPrompts, mockUsers, mockWorkflows } from './mockData';
+import { isSupabaseConfigured, supabase, SUPABASE_BUCKET, SUPABASE_URL } from './supabase';
 
 const LOCAL_AUTH_USER_KEY = 'cuerate.auth.user';
 const LOCAL_AUTH_SESSION_KEY = 'cuerate.auth.sessionUid';
@@ -54,6 +57,11 @@ const COLLECTIONS = {
   emailLookup: 'emailLookup',
   prompts: 'prompts',
   promptLikes: 'promptLikes',
+  promptSaves: 'promptSaves',
+  workflows: 'workflows',
+  workflowLikes: 'workflowLikes',
+  workflowSaves: 'workflowSaves',
+  userFollows: 'userFollows',
   notifications: 'notifications',
   collections: 'collections',
 } as const;
@@ -87,6 +95,37 @@ function cloneNotification(notification: Notification): Notification {
 
 function cloneCollection(collectionItem: Collection): Collection {
   return cloneDate(collectionItem);
+}
+
+function cloneWorkflow(workflow: Workflow): Workflow {
+  return {
+    ...cloneDate(workflow),
+    tags: [...workflow.tags],
+    steps: workflow.steps.map((step) => ({ ...step })),
+  };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function stripUndefinedFields<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefinedFields(item)) as T;
+  }
+
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .map(([key, entryValue]) => [key, stripUndefinedFields(entryValue)]);
+    return Object.fromEntries(entries) as T;
+  }
+
+  return value;
 }
 
 function toDate(value: unknown): Date {
@@ -190,20 +229,51 @@ function deserializeCollection(id: string, data: Record<string, unknown>): Colle
   };
 }
 
+function deserializeWorkflow(id: string, data: Record<string, unknown>): Workflow {
+  return {
+    id,
+    authorUid: String(data.authorUid ?? ''),
+    authorHandle: String(data.authorHandle ?? ''),
+    authorAvatar: String(data.authorAvatar ?? ''),
+    title: String(data.title ?? ''),
+    tool: String(data.tool ?? ''),
+    description: String(data.description ?? ''),
+    coverVideoUrl: String(data.coverVideoUrl ?? ''),
+    coverThumbnailUrl: String(data.coverThumbnailUrl ?? ''),
+    tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+    stepCount: Number(data.stepCount ?? 0),
+    likes: Number(data.likes ?? 0),
+    saves: Number(data.saves ?? 0),
+    mediaAspectRatio: data.mediaAspectRatio === 'portrait' ? 'portrait' : 'landscape',
+    createdAt: toDate(data.createdAt),
+    steps: Array.isArray(data.steps)
+      ? data.steps.map((entry, index) => {
+          const step = (entry ?? {}) as Record<string, unknown>;
+          return {
+            id: String(step.id ?? `step-${index + 1}`),
+            stepNumber: Number(step.stepNumber ?? index + 1),
+            label: String(step.label ?? ''),
+            generationType: (step.generationType as Workflow['steps'][number]['generationType']) ?? 'prompt_to_video',
+            promptText: step.promptText ? String(step.promptText) : undefined,
+            note: step.note ? String(step.note) : undefined,
+            inputImageUrl: step.inputImageUrl ? String(step.inputImageUrl) : undefined,
+            startFrameUrl: step.startFrameUrl ? String(step.startFrameUrl) : undefined,
+            endFrameUrl: step.endFrameUrl ? String(step.endFrameUrl) : undefined,
+            resultMediaUrl: String(step.resultMediaUrl ?? ''),
+            resultThumbnailUrl: String(step.resultThumbnailUrl ?? ''),
+            resultContentType: step.resultContentType === 'image' ? 'image' : 'video',
+          };
+        })
+      : [],
+  };
+}
+
 function requireDb() {
   if (!db) {
     throw new Error('Firebase Firestore is not configured. Add your Vite Firebase env vars to enable backend reads/writes.');
   }
 
   return db;
-}
-
-function requireStorage() {
-  if (!storage) {
-    throw new Error('Firebase Storage is not configured. Add your Vite Firebase env vars to enable uploads.');
-  }
-
-  return storage;
 }
 
 function canUseBrowserStorage() {
@@ -394,7 +464,7 @@ async function upsertUserProfile(profile: User) {
   }
 
   const firestore = requireDb();
-  await setDoc(doc(firestore, COLLECTIONS.users, profile.uid), profile, { merge: true });
+  await setDoc(doc(firestore, COLLECTIONS.users, profile.uid), stripUndefinedFields(profile), { merge: true });
   if (profile.email) {
     await upsertEmailLookup({ email: profile.email, userId: profile.uid });
   }
@@ -475,6 +545,53 @@ async function ensureUniqueHandle(baseHandle: string, currentUserId?: string) {
   }
 }
 
+async function isHandleTakenByAnotherUser(handle: string, currentUserId: string) {
+  const normalizedHandle = sanitizeHandle(handle);
+  if (!normalizedHandle) {
+    return false;
+  }
+
+  if (!firebaseEnabled) {
+    return getFallbackUsers().some((user) => user.handle === normalizedHandle && user.uid !== currentUserId);
+  }
+
+  const firestore = requireDb();
+  const snapshot = await getDocs(
+    query(collection(firestore, COLLECTIONS.users), where('handle', '==', normalizedHandle), limit(2)),
+  );
+  return snapshot.docs.some((docSnapshot) => docSnapshot.id !== currentUserId);
+}
+
+async function syncAuthorIdentityOnContent(input: {
+  uid: string;
+  handle?: string;
+  avatarUrl?: string;
+}) {
+  if (!firebaseEnabled) {
+    return;
+  }
+
+  const updates = stripUndefinedFields({
+    authorHandle: input.handle,
+    authorAvatar: input.avatarUrl,
+  });
+
+  if (Object.keys(updates).length === 0) {
+    return;
+  }
+
+  const firestore = requireDb();
+  const [promptSnapshots, workflowSnapshots] = await Promise.all([
+    getDocs(query(collection(firestore, COLLECTIONS.prompts), where('authorUid', '==', input.uid))),
+    getDocs(query(collection(firestore, COLLECTIONS.workflows), where('authorUid', '==', input.uid))),
+  ]);
+
+  await Promise.all([
+    ...promptSnapshots.docs.map((entry) => updateDoc(entry.ref, updates)),
+    ...workflowSnapshots.docs.map((entry) => updateDoc(entry.ref, updates)),
+  ]);
+}
+
 async function logAuthEvent(input: Omit<AuthLog, 'id' | 'createdAt'>) {
   const authLog: AuthLog = {
     id: crypto.randomUUID(),
@@ -489,7 +606,7 @@ async function logAuthEvent(input: Omit<AuthLog, 'id' | 'createdAt'>) {
   const firestore = requireDb();
   const authLogDocument = { ...authLog } as Omit<AuthLog, 'id'> & { id?: string };
   delete authLogDocument.id;
-  const created = await addDoc(collection(firestore, COLLECTIONS.authLogs), authLogDocument);
+  const created = await addDoc(collection(firestore, COLLECTIONS.authLogs), stripUndefinedFields(authLogDocument));
 
   return {
     ...authLog,
@@ -513,7 +630,7 @@ export const authApi = {
 
     async sendEmailLink(input: { mode: 'login' | 'signup'; email: string; displayName?: string; handle?: string }): Promise<void> {
       const normalizedEmail = normalizeEmail(input.email);
-      const normalizedHandle = sanitizeHandle(input.handle || input.displayName || normalizedEmail.split('@')[0]);
+      const normalizedHandle = sanitizeHandle(input.handle || normalizedEmail.split('@')[0]);
 
       if (input.mode === 'signup') {
         if (await emailExists(normalizedEmail)) {
@@ -530,7 +647,6 @@ export const authApi = {
       writePendingEmailLink({
         mode: input.mode,
         email: normalizedEmail,
-        displayName: input.displayName,
         handle: normalizedHandle,
       });
 
@@ -563,8 +679,8 @@ export const authApi = {
         const user = buildMockUserProfile({
           uid: crypto.randomUUID(),
           email: pending.email,
-          displayName: pending.displayName || pending.email.split('@')[0],
-          handle: sanitizeHandle(pending.handle || pending.displayName || pending.email.split('@')[0]) || 'creator',
+          displayName: pending.handle || pending.email.split('@')[0],
+          handle: sanitizeHandle(pending.handle || pending.email.split('@')[0]) || 'creator',
         });
         user.authProvider = 'password';
         user.emailVerified = true;
@@ -580,12 +696,12 @@ export const authApi = {
 
       const credential = await signInWithEmailLink(auth, pending.email, currentUrl);
       const existingUser = await getUserByUid(credential.user.uid);
-      const desiredHandle = existingUser?.handle || pending.handle || pending.displayName || pending.email.split('@')[0];
+      const desiredHandle = existingUser?.handle || pending.handle || pending.email.split('@')[0];
       const uniqueHandle = await ensureUniqueHandle(desiredHandle, credential.user.uid);
       const user = await upsertUserProfile(
         buildUserProfileFromAuthUser(credential.user, {
           ...existingUser,
-          displayName: existingUser?.displayName || pending.displayName || credential.user.displayName || undefined,
+          displayName: uniqueHandle,
           handle: uniqueHandle,
         }),
       );
@@ -609,6 +725,63 @@ export const authApi = {
       writePendingEmailLink(null);
       emitAuthUser(user);
       return user;
+    },
+
+    async updateProfile(input: {
+      uid: string;
+      handle: string;
+      bio: string;
+      avatarUrl?: string;
+      links?: User['links'];
+    }): Promise<User> {
+      if (!input.uid) {
+        throw new Error('Missing user id.');
+      }
+
+      if (firebaseEnabled && auth?.currentUser?.uid !== input.uid) {
+        throw new Error('You can only edit your own profile.');
+      }
+
+      const existingUser = await getUserByUid(input.uid);
+      if (!existingUser) {
+        throw new Error('Profile not found.');
+      }
+
+      const normalizedHandle = sanitizeHandle(input.handle);
+      if (!normalizedHandle) {
+        throw new Error('Username must include letters, numbers, or underscores.');
+      }
+
+      if (await isHandleTakenByAnotherUser(normalizedHandle, input.uid)) {
+        throw new Error('Username taken. Choose another one.');
+      }
+
+      const nextUser: User = {
+        ...existingUser,
+        handle: normalizedHandle,
+        displayName: normalizedHandle,
+        bio: input.bio.trim(),
+        avatarUrl: input.avatarUrl ?? existingUser.avatarUrl,
+        links: input.links ?? existingUser.links,
+        updatedAt: new Date(),
+      };
+
+      const savedUser = await upsertUserProfile(nextUser);
+
+      const handleChanged = savedUser.handle !== existingUser.handle;
+      const avatarChanged = savedUser.avatarUrl !== existingUser.avatarUrl;
+
+      if (handleChanged || avatarChanged) {
+        await syncAuthorIdentityOnContent({
+          uid: savedUser.uid,
+          handle: handleChanged ? savedUser.handle : undefined,
+          avatarUrl: avatarChanged ? savedUser.avatarUrl : undefined,
+        });
+      }
+
+      writeLocalAuthUser(savedUser);
+      emitAuthUser(savedUser);
+      return cloneUser(savedUser);
     },
 
     async signInWithGoogle(): Promise<User | null> {
@@ -642,6 +815,7 @@ export const authApi = {
       const user = await upsertUserProfile(
         buildUserProfileFromAuthUser(credential.user, {
           ...existingUser,
+          displayName: existingUser?.displayName || uniqueHandle,
           handle: uniqueHandle,
         }),
       );
@@ -723,6 +897,7 @@ export const authApi = {
 
 export const backendStatus = {
   firebaseEnabled,
+  supabaseConfigured: isSupabaseConfigured,
 };
 
 export const metaApi = {
@@ -763,10 +938,109 @@ export const usersApi = {
   },
 };
 
+export const followsApi = {
+  async getFollowingUserIds(userId: string): Promise<string[]> {
+    if (!userId) {
+      return [];
+    }
+
+    if (!firebaseEnabled) {
+      return [];
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(
+      query(collection(firestore, COLLECTIONS.userFollows), where('followerUid', '==', userId)),
+    );
+
+    return snapshot.docs
+      .map((entry) => String(entry.data().followingUid ?? ''))
+      .filter(Boolean);
+  },
+
+  async getFollowerCount(userId: string): Promise<number> {
+    if (!userId) {
+      return 0;
+    }
+
+    if (!firebaseEnabled) {
+      return 0;
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(
+      query(collection(firestore, COLLECTIONS.userFollows), where('followingUid', '==', userId)),
+    );
+
+    return snapshot.size;
+  },
+
+  async getFollowingCount(userId: string): Promise<number> {
+    if (!userId) {
+      return 0;
+    }
+
+    if (!firebaseEnabled) {
+      return 0;
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(
+      query(collection(firestore, COLLECTIONS.userFollows), where('followerUid', '==', userId)),
+    );
+
+    return snapshot.size;
+  },
+
+  async isFollowing(followerUid: string, followingUid: string): Promise<boolean> {
+    if (!followerUid || !followingUid) {
+      return false;
+    }
+
+    if (!firebaseEnabled) {
+      return false;
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDoc(doc(firestore, COLLECTIONS.userFollows, `${followerUid}_${followingUid}`));
+    return snapshot.exists();
+  },
+
+  async toggleFollow(followerUid: string, followingUid: string): Promise<{ following: boolean }> {
+    if (!followerUid) {
+      throw new Error('Log in to follow creators.');
+    }
+
+    if (!followingUid || followerUid === followingUid) {
+      throw new Error('Invalid follow target.');
+    }
+
+    if (!firebaseEnabled) {
+      return { following: true };
+    }
+
+    const firestore = requireDb();
+    const followRef = doc(firestore, COLLECTIONS.userFollows, `${followerUid}_${followingUid}`);
+    const followSnapshot = await getDoc(followRef);
+
+    if (followSnapshot.exists()) {
+      await deleteDoc(followRef);
+      return { following: false };
+    }
+
+    await setDoc(followRef, {
+      followerUid,
+      followingUid,
+      createdAt: new Date(),
+    });
+    return { following: true };
+  },
+};
+
 export const promptsApi = {
   async getFeedPrompts(): Promise<Prompt[]> {
     if (!firebaseEnabled) {
-      return mockPrompts.map(clonePrompt);
+      return [];
     }
 
     const firestore = requireDb();
@@ -776,7 +1050,7 @@ export const promptsApi = {
 
   async getPromptsByAuthorUid(authorUid: string): Promise<Prompt[]> {
     if (!firebaseEnabled) {
-      return mockPrompts.filter((prompt) => prompt.authorUid === authorUid).map(clonePrompt);
+      return [];
     }
 
     const firestore = requireDb();
@@ -833,7 +1107,7 @@ export const promptsApi = {
     const promptDocument = { ...prompt } as Omit<Prompt, 'id'> & { id?: string };
     delete promptDocument.id;
     const created = await addDoc(collection(firestore, COLLECTIONS.prompts), {
-      ...promptDocument,
+      ...stripUndefinedFields(promptDocument),
     });
 
     return {
@@ -854,6 +1128,25 @@ export const promptsApi = {
     const firestore = requireDb();
     const snapshot = await getDocs(
       query(collection(firestore, COLLECTIONS.promptLikes), where('userId', '==', userId)),
+    );
+
+    return snapshot.docs
+      .map((entry) => String(entry.data().promptId ?? ''))
+      .filter(Boolean);
+  },
+
+  async getSavedPromptIds(userId: string): Promise<string[]> {
+    if (!userId) {
+      return [];
+    }
+
+    if (!firebaseEnabled) {
+      return [];
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(
+      query(collection(firestore, COLLECTIONS.promptSaves), where('userId', '==', userId)),
     );
 
     return snapshot.docs
@@ -909,6 +1202,83 @@ export const promptsApi = {
     });
   },
 
+  async toggleSave(promptId: string, userId: string): Promise<{ saved: boolean; saves: number }> {
+    if (!userId) {
+      throw new Error('Log in to save prompts.');
+    }
+
+    if (!firebaseEnabled) {
+      return { saved: true, saves: 0 };
+    }
+
+    const firestore = requireDb();
+    const promptRef = doc(firestore, COLLECTIONS.prompts, promptId);
+    const saveRef = doc(firestore, COLLECTIONS.promptSaves, `${promptId}_${userId}`);
+
+    return runTransaction(firestore, async (transaction) => {
+      const [promptSnapshot, saveSnapshot] = await Promise.all([
+        transaction.get(promptRef),
+        transaction.get(saveRef),
+      ]);
+
+      if (!promptSnapshot.exists()) {
+        throw new Error('Prompt not found.');
+      }
+
+      const currentSaves = Number(promptSnapshot.data().saves ?? 0);
+
+      if (saveSnapshot.exists()) {
+        transaction.delete(saveRef);
+        transaction.update(promptRef, { saves: Math.max(0, currentSaves - 1) });
+        return {
+          saved: false,
+          saves: Math.max(0, currentSaves - 1),
+        };
+      }
+
+      transaction.set(saveRef, {
+        promptId,
+        userId,
+        createdAt: new Date(),
+      });
+      transaction.update(promptRef, { saves: currentSaves + 1 });
+      return {
+        saved: true,
+        saves: currentSaves + 1,
+      };
+    });
+  },
+
+  async deletePrompt(promptId: string, userId: string): Promise<void> {
+    if (!userId) {
+      throw new Error('Log in to delete prompts.');
+    }
+
+    if (!firebaseEnabled) {
+      return;
+    }
+
+    const firestore = requireDb();
+    const promptRef = doc(firestore, COLLECTIONS.prompts, promptId);
+    const promptSnapshot = await getDoc(promptRef);
+
+    if (!promptSnapshot.exists()) {
+      throw new Error('Prompt not found.');
+    }
+
+    const promptData = promptSnapshot.data() as Record<string, unknown>;
+    if (String(promptData.authorUid ?? '') !== userId) {
+      throw new Error('Only the author can delete this prompt.');
+    }
+
+    const likeSnapshots = await getDocs(
+      query(collection(firestore, COLLECTIONS.promptLikes), where('promptId', '==', promptId)),
+    );
+
+    await Promise.all(likeSnapshots.docs.map((likeDoc) => deleteDoc(likeDoc.ref)));
+    await deleteDoc(promptRef);
+  },
+
   async forkPrompt(input: ForkPromptInput): Promise<Prompt> {
     const sourcePrompt = firebaseEnabled
       ? await (async () => {
@@ -933,9 +1303,11 @@ export const promptsApi = {
       moodLabel: input.moodLabel,
       difficulty: sourcePrompt.difficulty,
       contentType: sourcePrompt.contentType,
-      aspectRatio: sourcePrompt.aspectRatio,
+      aspectRatio: input.aspectRatio ?? sourcePrompt.aspectRatio,
       videoUrl: input.videoUrl ?? sourcePrompt.videoUrl,
       thumbnailUrl: input.thumbnailUrl ?? sourcePrompt.thumbnailUrl,
+      mediaWidth: input.mediaWidth ?? sourcePrompt.mediaWidth,
+      mediaHeight: input.mediaHeight ?? sourcePrompt.mediaHeight,
     });
 
     const result: Prompt = {
@@ -957,6 +1329,220 @@ export const promptsApi = {
     });
 
     return result;
+  },
+};
+
+export const workflowsApi = {
+  async getFeedWorkflows(): Promise<Workflow[]> {
+    if (!firebaseEnabled) {
+      return mockWorkflows.map(cloneWorkflow);
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.workflows), orderBy('createdAt', 'desc')));
+    return snapshot.docs.map((entry) => deserializeWorkflow(entry.id, entry.data() as Record<string, unknown>));
+  },
+
+  async getWorkflowById(workflowId: string): Promise<Workflow | null> {
+    if (!firebaseEnabled) {
+      const workflow = mockWorkflows.find((entry) => entry.id === workflowId) ?? null;
+      return workflow ? cloneWorkflow(workflow) : null;
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDoc(doc(firestore, COLLECTIONS.workflows, workflowId));
+    if (!snapshot.exists()) {
+      return null;
+    }
+    return deserializeWorkflow(snapshot.id, snapshot.data() as Record<string, unknown>);
+  },
+
+  async createWorkflow(input: WorkflowCreateInput): Promise<Workflow> {
+    const author = (await getUserByUid(input.authorUid)) ?? mockUsers.find((user) => user.uid === input.authorUid) ?? null;
+
+    if (!author) {
+      throw new Error(`Could not find author "${input.authorUid}" for workflow creation.`);
+    }
+
+    const workflow: Workflow = {
+      id: crypto.randomUUID(),
+      authorUid: author.uid,
+      authorHandle: author.handle,
+      authorAvatar: author.avatarUrl,
+      title: input.title.trim(),
+      tool: input.tool.trim(),
+      description: input.description.trim(),
+      coverVideoUrl: input.coverVideoUrl,
+      coverThumbnailUrl: input.coverThumbnailUrl,
+      tags: input.tags,
+      stepCount: input.steps.length,
+      likes: 0,
+      saves: 0,
+      mediaAspectRatio: input.mediaAspectRatio ?? 'landscape',
+      createdAt: new Date(),
+      steps: input.steps.map((step, index) => ({
+        id: `step-${index + 1}`,
+        stepNumber: index + 1,
+        label: step.label.trim() || `Step ${index + 1}`,
+        generationType: step.generationType,
+        promptText: step.promptText?.trim() || undefined,
+        note: step.note?.trim() || undefined,
+        inputImageUrl: step.inputImageUrl,
+        startFrameUrl: step.startFrameUrl,
+        endFrameUrl: step.endFrameUrl,
+        resultMediaUrl: step.resultMediaUrl,
+        resultThumbnailUrl: step.resultThumbnailUrl,
+        resultContentType: step.resultContentType,
+      })),
+    };
+
+    if (!firebaseEnabled) {
+      return cloneWorkflow(workflow);
+    }
+
+    const firestore = requireDb();
+    const workflowDocument = { ...workflow } as Omit<Workflow, 'id'> & { id?: string };
+    delete workflowDocument.id;
+    const created = await addDoc(collection(firestore, COLLECTIONS.workflows), {
+      ...stripUndefinedFields(workflowDocument),
+    });
+
+    return {
+      ...workflow,
+      id: created.id,
+    };
+  },
+
+  async getLikedWorkflowIds(userId: string): Promise<string[]> {
+    if (!userId) {
+      return [];
+    }
+
+    if (!firebaseEnabled) {
+      return [];
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(
+      query(collection(firestore, COLLECTIONS.workflowLikes), where('userId', '==', userId)),
+    );
+
+    return snapshot.docs
+      .map((entry) => String(entry.data().workflowId ?? ''))
+      .filter(Boolean);
+  },
+
+  async getSavedWorkflowIds(userId: string): Promise<string[]> {
+    if (!userId) {
+      return [];
+    }
+
+    if (!firebaseEnabled) {
+      return [];
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(
+      query(collection(firestore, COLLECTIONS.workflowSaves), where('userId', '==', userId)),
+    );
+
+    return snapshot.docs
+      .map((entry) => String(entry.data().workflowId ?? ''))
+      .filter(Boolean);
+  },
+
+  async toggleLike(workflowId: string, userId: string): Promise<{ liked: boolean; likes: number }> {
+    if (!userId) {
+      throw new Error('Log in to like workflows.');
+    }
+
+    if (!firebaseEnabled) {
+      return { liked: true, likes: 0 };
+    }
+
+    const firestore = requireDb();
+    const workflowRef = doc(firestore, COLLECTIONS.workflows, workflowId);
+    const likeRef = doc(firestore, COLLECTIONS.workflowLikes, `${workflowId}_${userId}`);
+
+    return runTransaction(firestore, async (transaction) => {
+      const [workflowSnapshot, likeSnapshot] = await Promise.all([
+        transaction.get(workflowRef),
+        transaction.get(likeRef),
+      ]);
+
+      if (!workflowSnapshot.exists()) {
+        throw new Error('Workflow not found.');
+      }
+
+      const currentLikes = Number(workflowSnapshot.data().likes ?? 0);
+
+      if (likeSnapshot.exists()) {
+        transaction.delete(likeRef);
+        transaction.update(workflowRef, { likes: Math.max(0, currentLikes - 1) });
+        return {
+          liked: false,
+          likes: Math.max(0, currentLikes - 1),
+        };
+      }
+
+      transaction.set(likeRef, {
+        workflowId,
+        userId,
+        createdAt: new Date(),
+      });
+      transaction.update(workflowRef, { likes: currentLikes + 1 });
+      return {
+        liked: true,
+        likes: currentLikes + 1,
+      };
+    });
+  },
+
+  async toggleSave(workflowId: string, userId: string): Promise<{ saved: boolean; saves: number }> {
+    if (!userId) {
+      throw new Error('Log in to save workflows.');
+    }
+
+    if (!firebaseEnabled) {
+      return { saved: true, saves: 0 };
+    }
+
+    const firestore = requireDb();
+    const workflowRef = doc(firestore, COLLECTIONS.workflows, workflowId);
+    const saveRef = doc(firestore, COLLECTIONS.workflowSaves, `${workflowId}_${userId}`);
+
+    return runTransaction(firestore, async (transaction) => {
+      const [workflowSnapshot, saveSnapshot] = await Promise.all([
+        transaction.get(workflowRef),
+        transaction.get(saveRef),
+      ]);
+
+      if (!workflowSnapshot.exists()) {
+        throw new Error('Workflow not found.');
+      }
+
+      const currentSaves = Number(workflowSnapshot.data().saves ?? 0);
+
+      if (saveSnapshot.exists()) {
+        transaction.delete(saveRef);
+        transaction.update(workflowRef, { saves: Math.max(0, currentSaves - 1) });
+        return {
+          saved: false,
+          saves: Math.max(0, currentSaves - 1),
+        };
+      }
+
+      transaction.set(saveRef, {
+        workflowId,
+        userId,
+        createdAt: new Date(),
+      });
+      transaction.update(workflowRef, { saves: currentSaves + 1 });
+      return {
+        saved: true,
+        saves: currentSaves + 1,
+      };
+    });
   },
 };
 
@@ -1029,7 +1615,7 @@ export const collectionsApi = {
     const collectionDocument = { ...collectionItem } as Omit<Collection, 'id'> & { id?: string };
     delete collectionDocument.id;
     const created = await addDoc(collection(firestore, COLLECTIONS.collections), {
-      ...collectionDocument,
+      ...stripUndefinedFields(collectionDocument),
     });
 
     return {
@@ -1041,20 +1627,96 @@ export const collectionsApi = {
 
 export const uploadsApi = {
   async uploadPromptMedia(file: File, userId: string) {
-    if (!firebaseEnabled) {
-      return {
-        path: `mock://${userId}/${file.name}`,
-        downloadUrl: URL.createObjectURL(file),
-      };
+    // Supabase buckets are the single media storage backend.
+    if (!isSupabaseConfigured || !supabase) {
+      throw new Error(
+        'Supabase Storage is required for media uploads. Set VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, and VITE_SUPABASE_BUCKET.',
+      );
     }
 
-    const firebaseStorage = requireStorage();
-    const fileRef = ref(firebaseStorage, `prompts/${userId}/${Date.now()}-${file.name}`);
-    await uploadBytes(fileRef, file);
+    const fileName = `${Date.now()}-${file.name}`;
+    const filePath = `prompts/${userId}/${fileName}`;
+
+    try {
+      const { data: _data, error } = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .upload(filePath, file, {
+          upsert: false,
+          contentType: file.type || undefined,
+        });
+
+      if (error) {
+        if (/row-level security/i.test(error.message)) {
+          throw new Error(
+            `Supabase Storage policy blocked the upload for bucket "${SUPABASE_BUCKET}". Add INSERT/SELECT policies for this bucket in Supabase Storage policies.`,
+          );
+        }
+        console.error('Supabase upload error:', error);
+        throw error;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/failed to fetch/i.test(message)) {
+        throw new Error(
+          `Upload could not reach Supabase (${SUPABASE_URL}). Check internet/VPN, disable ad blockers for localhost, and confirm the Supabase project is active.`,
+        );
+      }
+      throw error;
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from(SUPABASE_BUCKET)
+      .getPublicUrl(filePath);
 
     return {
-      path: fileRef.fullPath,
-      downloadUrl: await getDownloadURL(fileRef),
+      path: filePath,
+      downloadUrl: publicUrl,
+    };
+  },
+
+  async uploadProfileAvatar(file: File, userId: string) {
+    if (!isSupabaseConfigured || !supabase) {
+      throw new Error(
+        'Supabase Storage is required for media uploads. Set VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, and VITE_SUPABASE_BUCKET.',
+      );
+    }
+
+    const fileName = `${Date.now()}-${file.name}`;
+    const filePath = `avatars/${userId}/${fileName}`;
+
+    try {
+      const { data: _data, error } = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .upload(filePath, file, {
+          upsert: false,
+          contentType: file.type || undefined,
+        });
+
+      if (error) {
+        if (/row-level security/i.test(error.message)) {
+          throw new Error(
+            `Supabase Storage policy blocked the upload for bucket "${SUPABASE_BUCKET}". Add INSERT/SELECT policies for this bucket in Supabase Storage policies.`,
+          );
+        }
+        throw error;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/failed to fetch/i.test(message)) {
+        throw new Error(
+          `Upload could not reach Supabase (${SUPABASE_URL}). Check internet/VPN, disable ad blockers for localhost, and confirm the Supabase project is active.`,
+        );
+      }
+      throw error;
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from(SUPABASE_BUCKET)
+      .getPublicUrl(filePath);
+
+    return {
+      path: filePath,
+      downloadUrl: publicUrl,
     };
   },
 };

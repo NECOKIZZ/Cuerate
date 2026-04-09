@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { Check } from 'lucide-react';
 import { metaApi, usersApi } from '../../lib/backend';
 import { useBackendQuery } from '../../lib/useBackendQuery';
+import { truncateText } from '../../lib/text';
 
 type Step = 1 | 2 | 3;
 
@@ -151,41 +152,46 @@ export function Onboarding() {
               Follow All
             </button>
 
-            <div className="space-y-3">
-              {suggestedCreators.map((creator) => (
-                <div
-                  key={creator.uid}
-                  className="flex items-center gap-4 p-4 rounded-[var(--cuerate-r-lg)] glass-surface card-top-edge"
-                >
-                  <img
-                    src={creator.avatarUrl}
-                    alt={creator.handle}
-                    className="w-12 h-12 rounded-full border-2 border-[var(--cuerate-indigo)]"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-primary font-medium text-[var(--cuerate-text-1)] truncate">
-                      {creator.displayName}
-                    </p>
-                    <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
-                      @{creator.handle}
-                    </p>
-                    <p className="font-accent text-xs text-[var(--cuerate-text-2)] mt-1">
-                      {creator.primaryModels.join(', ')}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => toggleFollow(creator.uid)}
-                    className={`px-5 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm font-medium transition-all ${
-                      followedCreators.includes(creator.uid)
-                        ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-                        : 'glass-surface text-[var(--cuerate-text-1)]'
-                    }`}
-                  >
-                    {followedCreators.includes(creator.uid) ? 'Following' : 'Follow'}
-                  </button>
-                </div>
-              ))}
-            </div>
+	            <div className="space-y-3">
+	              {suggestedCreators.map((creator) => {
+                  const displayName = truncateText(creator.displayName, 24);
+                  const displayHandle = truncateText(creator.handle, 18);
+
+                  return (
+                    <div
+                      key={creator.uid}
+                      className="flex items-center gap-4 p-4 rounded-[var(--cuerate-r-lg)] glass-surface card-top-edge"
+                    >
+                      <img
+                        src={creator.avatarUrl}
+                        alt={creator.handle}
+                        className="w-12 h-12 rounded-full border-2 border-[var(--cuerate-indigo)]"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-primary font-medium text-[var(--cuerate-text-1)] truncate" title={creator.displayName}>
+                          {displayName}
+                        </p>
+                        <p className="font-accent text-sm text-[var(--cuerate-text-2)] truncate" title={`@${creator.handle}`}>
+                          @{displayHandle}
+                        </p>
+                        <p className="font-accent text-xs text-[var(--cuerate-text-2)] mt-1">
+                          {creator.primaryModels.join(', ')}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => toggleFollow(creator.uid)}
+                        className={`px-5 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm font-medium transition-all ${
+                          followedCreators.includes(creator.uid)
+                            ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                            : 'glass-surface text-[var(--cuerate-text-1)]'
+                        }`}
+                      >
+                        {followedCreators.includes(creator.uid) ? 'Following' : 'Follow'}
+                      </button>
+                    </div>
+                  );
+                })}
+	            </div>
 
             <button
               onClick={handleContinue}

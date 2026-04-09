@@ -12,6 +12,7 @@
   ## Firebase Setup
 
   Copy `.env.example` to `.env` and fill in your Firebase web app values.
+  Also set Supabase vars (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_BUCKET`) because media uploads use Supabase Storage buckets.
 
   The app now reads through `src/lib/backend.ts`, which uses Firebase when env vars are present and falls back to local stubs/mock data when they are not.
 

@@ -55,6 +55,71 @@ export interface Prompt {
   createdAt: Date;
 }
 
+export type WorkflowGenerationType =
+  | 'prompt_to_video'
+  | 'image_to_video'
+  | 'frames_to_video'
+  | 'prompt_to_image';
+
+export interface WorkflowStep {
+  id: string;
+  stepNumber: number;
+  label: string;
+  generationType: WorkflowGenerationType;
+  promptText?: string;
+  note?: string;
+  inputImageUrl?: string;
+  startFrameUrl?: string;
+  endFrameUrl?: string;
+  resultMediaUrl: string;
+  resultThumbnailUrl: string;
+  resultContentType: PromptContentType;
+}
+
+export interface Workflow {
+  id: string;
+  authorUid: string;
+  authorHandle: string;
+  authorAvatar: string;
+  title: string;
+  tool: string;
+  description: string;
+  coverVideoUrl: string;
+  coverThumbnailUrl: string;
+  tags: string[];
+  stepCount: number;
+  likes: number;
+  saves: number;
+  mediaAspectRatio: PromptAspectRatio;
+  createdAt: Date;
+  steps: WorkflowStep[];
+}
+
+export interface WorkflowStepCreateInput {
+  label: string;
+  generationType: WorkflowGenerationType;
+  promptText?: string;
+  note?: string;
+  inputImageUrl?: string;
+  startFrameUrl?: string;
+  endFrameUrl?: string;
+  resultMediaUrl: string;
+  resultThumbnailUrl: string;
+  resultContentType: PromptContentType;
+}
+
+export interface WorkflowCreateInput {
+  authorUid: string;
+  title: string;
+  tool: string;
+  description: string;
+  coverVideoUrl: string;
+  coverThumbnailUrl: string;
+  tags: string[];
+  mediaAspectRatio?: PromptAspectRatio;
+  steps: WorkflowStepCreateInput[];
+}
+
 export type NotificationType =
   | 'follow'
   | 'like'
@@ -127,6 +192,9 @@ export interface ForkPromptInput {
   model: string;
   styleTags: string[];
   moodLabel: string;
+  aspectRatio?: PromptAspectRatio;
+  mediaWidth?: number;
+  mediaHeight?: number;
   thumbnailUrl?: string;
   videoUrl?: string;
 }

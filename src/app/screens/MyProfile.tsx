@@ -1,17 +1,73 @@
-import { useState } from 'react';
-import { Twitter, Instagram, Youtube, Globe, LogOut } from 'lucide-react';
+import { ChangeEvent, useEffect, useState } from 'react';
+import { Camera, Globe, Instagram, Loader2, LogOut, Trash2, Twitter, X, Youtube } from 'lucide-react';
 import { Link } from 'react-router';
-import { authApi, promptsApi } from '../../lib/backend';
+import { authApi, followsApi, promptsApi, uploadsApi } from '../../lib/backend';
 import { useBackendQuery } from '../../lib/useBackendQuery';
 import { useAuth } from '../../lib/auth-context';
+import { truncateText } from '../../lib/text';
+import { User } from '../../lib/types';
+
+function buildExternalUrl(rawUrl?: string) {
+  const value = rawUrl?.trim();
+  if (!value) {
+    return '#';
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  return `https://${value}`;
+}
 
 export function MyProfile() {
-  const [activeTab, setActiveTab] = useState<'prompts' | 'forks' | 'liked'>('prompts');
+  const [activeTab, setActiveTab] = useState<'prompts' | 'forks' | 'saves'>('prompts');
+  const [deletingPromptId, setDeletingPromptId] = useState<string | null>(null);
+  const [removedPromptIds, setRemovedPromptIds] = useState<Set<string>>(new Set());
+  const [profile, setProfile] = useState<User | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  const [draftHandle, setDraftHandle] = useState('');
+  const [draftBio, setDraftBio] = useState('');
+  const [draftX, setDraftX] = useState('');
+  const [draftInstagram, setDraftInstagram] = useState('');
+  const [draftYoutube, setDraftYoutube] = useState('');
+  const [draftWebsite, setDraftWebsite] = useState('');
   const { signOut } = useAuth();
   const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
   const { data: prompts } = useBackendQuery(() => promptsApi.getFeedPrompts(), [], []);
+  const { data: savedPromptIds } = useBackendQuery(
+    () => (profile?.uid ? promptsApi.getSavedPromptIds(profile.uid) : Promise.resolve([])),
+    [],
+    [profile?.uid],
+  );
+  const { data: followerCount } = useBackendQuery(
+    () => (profile?.uid ? followsApi.getFollowerCount(profile.uid) : Promise.resolve(0)),
+    0,
+    [profile?.uid],
+  );
+  const { data: followingCount } = useBackendQuery(
+    () => (profile?.uid ? followsApi.getFollowingCount(profile.uid) : Promise.resolve(0)),
+    0,
+    [profile?.uid],
+  );
 
-  if (!currentUser) {
+  useEffect(() => {
+    setProfile(currentUser);
+  }, [currentUser]);
+
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrl) {
+        URL.revokeObjectURL(avatarPreviewUrl);
+      }
+    };
+  }, [avatarPreviewUrl]);
+
+  if (!profile) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
         <div className="max-w-md w-full glass-surface rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] p-8 text-center">
@@ -30,24 +86,123 @@ export function MyProfile() {
     );
   }
 
-  const userPrompts = prompts.filter((prompt) => prompt.authorUid === currentUser.uid);
-  const userForks = prompts.filter((prompt) => prompt.isForked && prompt.authorUid === currentUser.uid);
-  const likedPrompts = prompts.slice(0, 3);
+  const visiblePrompts = prompts.filter((prompt) => !removedPromptIds.has(prompt.id));
+  const userPrompts = visiblePrompts.filter((prompt) => prompt.authorUid === profile.uid);
+  const userForks = userPrompts.filter((prompt) => prompt.isForked);
+  const savedPrompts = visiblePrompts.filter((prompt) => savedPromptIds.includes(prompt.id));
+  const copiesCount = userPrompts.reduce((total, prompt) => total + prompt.copies, 0);
+  const displayHandle = truncateText(profile.handle, 20);
 
-  const getTabContent = () => {
+  const tabContent = (() => {
     switch (activeTab) {
       case 'prompts':
-        return userPrompts.length > 0 ? userPrompts : prompts.slice(0, 3);
+        return userPrompts;
       case 'forks':
-        return userForks.length > 0 ? userForks : [];
-      case 'liked':
-        return likedPrompts;
+        return userForks;
+      case 'saves':
+        return savedPrompts;
       default:
         return [];
     }
+  })();
+
+  const openEditModal = () => {
+    setDraftHandle(profile.handle);
+    setDraftBio(profile.bio);
+    setDraftX(profile.links.x ?? '');
+    setDraftInstagram(profile.links.instagram ?? '');
+    setDraftYoutube(profile.links.youtube ?? '');
+    setDraftWebsite(profile.links.website ?? '');
+    setAvatarFile(null);
+    if (avatarPreviewUrl) {
+      URL.revokeObjectURL(avatarPreviewUrl);
+    }
+    setAvatarPreviewUrl(null);
+    setProfileError(null);
+    setIsEditModalOpen(true);
   };
 
-  const tabContent = getTabContent();
+  const handleAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setProfileError('Please choose an image file for your profile picture.');
+      return;
+    }
+
+    if (avatarPreviewUrl) {
+      URL.revokeObjectURL(avatarPreviewUrl);
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setAvatarFile(file);
+    setAvatarPreviewUrl(previewUrl);
+    setProfileError(null);
+  };
+
+  const handleSaveProfile = async () => {
+    setIsSavingProfile(true);
+    setProfileError(null);
+
+    try {
+      let nextAvatarUrl = profile.avatarUrl;
+      if (avatarFile) {
+        const uploadedAvatar = await uploadsApi.uploadProfileAvatar(avatarFile, profile.uid);
+        nextAvatarUrl = uploadedAvatar.downloadUrl;
+      }
+
+      const updatedProfile = await authApi.updateProfile({
+        uid: profile.uid,
+        handle: draftHandle,
+        bio: draftBio,
+        avatarUrl: nextAvatarUrl,
+        links: {
+          x: draftX.trim() || undefined,
+          instagram: draftInstagram.trim() || undefined,
+          youtube: draftYoutube.trim() || undefined,
+          website: draftWebsite.trim() || undefined,
+        },
+      });
+
+      setProfile(updatedProfile);
+      setIsEditModalOpen(false);
+
+      if (avatarPreviewUrl) {
+        URL.revokeObjectURL(avatarPreviewUrl);
+      }
+      setAvatarPreviewUrl(null);
+      setAvatarFile(null);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : 'Could not save your profile.');
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleDeletePrompt = async (promptId: string) => {
+    const confirmed = window.confirm('Delete this post? This cannot be undone.');
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingPromptId(promptId);
+
+    try {
+      await promptsApi.deletePrompt(promptId, profile.uid);
+      setRemovedPromptIds((prev) => {
+        const next = new Set(prev);
+        next.add(promptId);
+        return next;
+      });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not delete this post.');
+    } finally {
+      setDeletingPromptId(null);
+    }
+  };
 
   return (
     <div className="min-h-screen pb-8">
@@ -64,89 +219,116 @@ export function MyProfile() {
           <div className="flex flex-col items-center text-center">
             <div className="relative mb-4">
               <img
-                src={currentUser.avatarUrl}
-                alt={currentUser.handle}
+                src={avatarPreviewUrl ?? profile.avatarUrl}
+                alt={profile.handle}
                 className="w-32 h-32 rounded-full border-4 border-[var(--cuerate-indigo)] indigo-glow"
               />
             </div>
-            <h2 className="font-primary font-bold text-xl text-[var(--cuerate-text-1)] mb-1">
-              {currentUser.displayName}
+            <h2 className="max-w-[280px] truncate font-primary font-bold text-xl text-[var(--cuerate-text-1)] mb-1" title={`@${profile.handle}`}>
+              @{displayHandle}
             </h2>
-            <p className="font-accent text-sm text-[var(--cuerate-text-2)] mb-3">
-              @{currentUser.handle}
-            </p>
             <p className="font-accent text-sm text-[var(--cuerate-text-1)] mb-3 max-w-xs">
-              {currentUser.bio}
+              {profile.bio || 'No profile bio yet.'}
             </p>
 
-            {(currentUser.links.x || currentUser.links.instagram || currentUser.links.youtube || currentUser.links.website) && (
+            {(profile.links.x || profile.links.instagram || profile.links.youtube || profile.links.website) && (
               <div className="flex gap-3 mb-3">
-                {currentUser.links.x && (
-                  <button className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors">
+                {profile.links.x && (
+                  <a
+                    href={buildExternalUrl(profile.links.x)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors"
+                    aria-label="Open X profile"
+                  >
                     <Twitter className="w-4 h-4 text-[var(--cuerate-text-1)]" />
-                  </button>
+                  </a>
                 )}
-                {currentUser.links.instagram && (
-                  <button className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors">
+                {profile.links.instagram && (
+                  <a
+                    href={buildExternalUrl(profile.links.instagram)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors"
+                    aria-label="Open Instagram profile"
+                  >
                     <Instagram className="w-4 h-4 text-[var(--cuerate-text-1)]" />
-                  </button>
+                  </a>
                 )}
-                {currentUser.links.youtube && (
-                  <button className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors">
+                {profile.links.youtube && (
+                  <a
+                    href={buildExternalUrl(profile.links.youtube)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors"
+                    aria-label="Open YouTube profile"
+                  >
                     <Youtube className="w-4 h-4 text-[var(--cuerate-text-1)]" />
-                  </button>
+                  </a>
                 )}
-                {currentUser.links.website && (
-                  <button className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors">
+                {profile.links.website && (
+                  <a
+                    href={buildExternalUrl(profile.links.website)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-2 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors"
+                    aria-label="Open website"
+                  >
                     <Globe className="w-4 h-4 text-[var(--cuerate-text-1)]" />
-                  </button>
+                  </a>
                 )}
               </div>
             )}
+
           </div>
 
           <div className="grid grid-cols-4 gap-3 p-4 rounded-[var(--cuerate-r-pill)] glass-surface">
             <div className="text-center">
               <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
-                {currentUser.totalPrompts}
+                {userPrompts.length}
               </p>
               <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Prompts</p>
             </div>
             <div className="text-center">
               <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
-                {currentUser.followers.toLocaleString()}
+                {followerCount.toLocaleString()}
               </p>
               <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Followers</p>
             </div>
             <div className="text-center">
               <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
-                {currentUser.following}
+                {followingCount}
               </p>
               <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Following</p>
             </div>
             <div className="text-center">
               <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
-                {currentUser.totalCopies}
+                {copiesCount}
               </p>
               <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Copies</p>
             </div>
           </div>
 
-          <button className="w-full py-3 rounded-[var(--cuerate-r-pill)] glass-surface border border-[var(--cuerate-indigo)] font-accent font-medium text-[var(--cuerate-indigo)] hover:bg-[var(--cuerate-indigo)]/10 transition-colors">
-            Edit Profile
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={openEditModal}
+              className="w-full py-3 rounded-[var(--cuerate-r-pill)] glass-surface border border-[var(--cuerate-indigo)] font-accent font-medium text-[var(--cuerate-indigo)] hover:bg-[var(--cuerate-indigo)]/10 hover:shadow-[0_0_22px_rgba(85,0,204,0.28)] hover:-translate-y-0.5 transition-all"
+            >
+              Edit Profile
+            </button>
 
-          <button
-            onClick={() => void signOut()}
-            className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)]/10 border border-[var(--cuerate-indigo)]/40 font-accent font-medium text-[var(--cuerate-indigo)] hover:bg-[var(--cuerate-indigo)]/20 transition-colors"
-          >
-            <LogOut className="h-4 w-4" />
-            Log Out
-          </button>
+            <button
+              onClick={() => void signOut()}
+              className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)]/10 border border-[var(--cuerate-indigo)]/40 font-accent font-medium text-[var(--cuerate-indigo)] hover:bg-[var(--cuerate-indigo)]/20 transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+              Log Out
+            </button>
+          </div>
 
           <div className="border-b border-[var(--cuerate-text-3)]">
-            <div className="flex gap-8">
-              {(['prompts', 'forks', 'liked'] as const).map((tab) => (
+            <div className="flex w-full items-center justify-around">
+              {(['prompts', 'forks', 'saves'] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -182,6 +364,19 @@ export function MyProfile() {
                       {prompt.copies}
                     </span>
                   </div>
+                  {activeTab === 'prompts' && prompt.authorUid === profile.uid && (
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleDeletePrompt(prompt.id);
+                      }}
+                      disabled={deletingPromptId === prompt.id}
+                      className="absolute top-1 right-1 p-2 rounded-full bg-black/60 hover:bg-red-500/80 transition-colors disabled:opacity-60"
+                      aria-label="Delete post"
+                    >
+                      <Trash2 className="h-4 w-4 text-white" />
+                    </button>
+                  )}
                 </div>
               ))
             ) : (
@@ -194,6 +389,115 @@ export function MyProfile() {
           </div>
         </div>
       </div>
+
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-bg)] p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-primary text-xl font-semibold text-[var(--cuerate-text-1)]">Edit profile</h3>
+              <button
+                onClick={() => setIsEditModalOpen(false)}
+                className="rounded-full p-2 hover:bg-[var(--cuerate-surface)]"
+                aria-label="Close edit profile dialog"
+              >
+                <X className="h-4 w-4 text-[var(--cuerate-text-2)]" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <img
+                  src={avatarPreviewUrl ?? profile.avatarUrl}
+                  alt={profile.handle}
+                  className="h-20 w-20 rounded-full border-2 border-[var(--cuerate-indigo)] object-cover"
+                />
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-[var(--cuerate-r-pill)] border border-[var(--cuerate-indigo)]/40 bg-[var(--cuerate-indigo)]/10 px-4 py-2 font-accent text-sm text-[var(--cuerate-indigo)] hover:bg-[var(--cuerate-indigo)]/20">
+                  <Camera className="h-4 w-4" />
+                  Upload photo
+                  <input type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
+                </label>
+              </div>
+
+              <div>
+                <label className="mb-2 block font-accent text-sm text-[var(--cuerate-text-2)]">Username</label>
+                <input
+                  value={draftHandle}
+                  onChange={(event) => setDraftHandle(event.target.value)}
+                  placeholder="username"
+                  className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block font-accent text-sm text-[var(--cuerate-text-2)]">Bio</label>
+                <textarea
+                  value={draftBio}
+                  onChange={(event) => setDraftBio(event.target.value)}
+                  rows={3}
+                  maxLength={160}
+                  className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <input
+                  value={draftX}
+                  onChange={(event) => setDraftX(event.target.value)}
+                  placeholder="X link"
+                  className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
+                />
+                <input
+                  value={draftInstagram}
+                  onChange={(event) => setDraftInstagram(event.target.value)}
+                  placeholder="Instagram link"
+                  className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
+                />
+                <input
+                  value={draftYoutube}
+                  onChange={(event) => setDraftYoutube(event.target.value)}
+                  placeholder="YouTube link"
+                  className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
+                />
+                <input
+                  value={draftWebsite}
+                  onChange={(event) => setDraftWebsite(event.target.value)}
+                  placeholder="Website link"
+                  className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-1)] outline-none focus:border-[var(--cuerate-indigo)]"
+                />
+              </div>
+
+              {profileError && (
+                <div className="rounded-[var(--cuerate-r-md)] border border-red-500/30 bg-red-500/10 px-4 py-3 font-accent text-sm text-red-200">
+                  {profileError}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="flex-1 rounded-[var(--cuerate-r-pill)] border border-[var(--cuerate-text-3)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-2)] hover:bg-[var(--cuerate-surface)]"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleSaveProfile()}
+                  disabled={isSavingProfile}
+                  className="flex-1 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)] px-4 py-3 font-accent text-sm font-medium text-white indigo-glow hover:opacity-90 disabled:opacity-60"
+                >
+                  {isSavingProfile ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Saving...
+                    </span>
+                  ) : (
+                    'Save changes'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
