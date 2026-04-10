@@ -165,7 +165,7 @@ export function Onboarding() {
                       <img
                         src={creator.avatarUrl}
                         alt={creator.handle}
-                        className="w-12 h-12 rounded-full border-2 border-[var(--cuerate-indigo)]"
+                        className="w-12 h-12 rounded-full border-2 border-[var(--cuerate-indigo)] object-cover object-center"
                       />
                       <div className="flex-1 min-w-0">
                         <p className="font-primary font-medium text-[var(--cuerate-text-1)] truncate" title={creator.displayName}>

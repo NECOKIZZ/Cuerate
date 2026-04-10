@@ -93,7 +93,7 @@ export function ForkPromptModal({ prompt, onClose, onSave }: ForkPromptModalProp
               <img
                 src={prompt.authorAvatar}
                 alt={prompt.authorHandle}
-                className="w-8 h-8 rounded-full"
+                className="w-8 h-8 rounded-full object-cover object-center"
               />
               <div>
                 <p className="font-accent text-xs text-[var(--cuerate-text-2)]">@{prompt.authorHandle}</p>

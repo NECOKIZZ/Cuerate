@@ -10,7 +10,7 @@ import {
   Play,
   Wand2,
 } from 'lucide-react';
-import { authApi, workflowsApi } from '../../lib/backend';
+import { workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
 import { useBackendQuery } from '../../lib/useBackendQuery';
 import { Workflow, WorkflowGenerationType } from '../../lib/types';
@@ -48,9 +48,7 @@ async function copyText(value: string) {
 export function WorkflowDetail() {
   const navigate = useNavigate();
   const { workflowId } = useParams();
-  const { user } = useAuth();
-  const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
-  const activeUser = user ?? currentUser;
+  const { user: activeUser, isLoading: authIsLoading } = useAuth();
 
   const { data: workflowData, isLoading } = useBackendQuery(
     () => (workflowId ? workflowsApi.getWorkflowById(workflowId) : Promise.resolve(null)),
@@ -115,6 +113,10 @@ export function WorkflowDetail() {
   const mediaAspectRatio = workflow.mediaAspectRatio === 'portrait' ? '9 / 16' : '16 / 9';
 
   const handleToggleLike = async () => {
+    if (authIsLoading) {
+      return;
+    }
+
     if (!activeUser) {
       navigate('/auth');
       return;
@@ -149,6 +151,10 @@ export function WorkflowDetail() {
   };
 
   const handleToggleSave = async () => {
+    if (authIsLoading) {
+      return;
+    }
+
     if (!activeUser) {
       navigate('/auth');
       return;
@@ -240,6 +246,7 @@ export function WorkflowDetail() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => void handleToggleSave()}
+                disabled={authIsLoading}
                 className={`flex min-h-[44px] items-center justify-center gap-2 rounded-[var(--cuerate-r-pill)] px-4 py-3 font-accent text-sm font-medium transition-all ${
                   saved
                     ? 'border border-[#f5a623]/35 bg-[#f5a623]/12 text-[#ffd27c]'
@@ -251,6 +258,7 @@ export function WorkflowDetail() {
               </button>
               <button
                 onClick={() => void handleToggleLike()}
+                disabled={authIsLoading}
                 className={`flex min-h-[44px] items-center justify-center gap-2 rounded-[var(--cuerate-r-pill)] px-4 py-3 font-accent text-sm font-medium transition-all ${
                   liked
                     ? 'border border-red-500/30 bg-red-500/10 text-red-300'

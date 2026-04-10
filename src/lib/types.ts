@@ -137,6 +137,7 @@ export interface Notification {
   fromHandle: string;
   fromAvatar?: string;
   promptId?: string;
+  workflowId?: string;
   message: string;
   read: boolean;
   createdAt: Date;

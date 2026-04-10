@@ -58,6 +58,7 @@ const COLLECTIONS = {
   prompts: 'prompts',
   promptLikes: 'promptLikes',
   promptSaves: 'promptSaves',
+  promptCopies: 'promptCopies',
   workflows: 'workflows',
   workflowLikes: 'workflowLikes',
   workflowSaves: 'workflowSaves',
@@ -140,6 +141,35 @@ function toDate(value: unknown): Date {
   return new Date();
 }
 
+function extractSupabaseStoragePathFromPublicUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0 || SUPABASE_URL.length === 0) {
+    return null;
+  }
+
+  try {
+    const sourceUrl = new URL(value);
+    const supabaseUrl = new URL(SUPABASE_URL);
+    if (sourceUrl.origin !== supabaseUrl.origin) {
+      return null;
+    }
+
+    const publicMarker = `/storage/v1/object/public/${SUPABASE_BUCKET}/`;
+    const markerIndex = sourceUrl.pathname.indexOf(publicMarker);
+    if (markerIndex === -1) {
+      return null;
+    }
+
+    const encodedPath = sourceUrl.pathname.slice(markerIndex + publicMarker.length);
+    if (!encodedPath) {
+      return null;
+    }
+
+    return decodeURIComponent(encodedPath);
+  } catch {
+    return null;
+  }
+}
+
 function deserializeUser(id: string, data: Record<string, unknown>): User {
   return {
     uid: id,
@@ -211,6 +241,7 @@ function deserializeNotification(id: string, data: Record<string, unknown>): Not
     fromHandle: String(data.fromHandle ?? ''),
     fromAvatar: data.fromAvatar ? String(data.fromAvatar) : undefined,
     promptId: data.promptId ? String(data.promptId) : undefined,
+    workflowId: data.workflowId ? String(data.workflowId) : undefined,
     message: String(data.message ?? ''),
     read: Boolean(data.read),
     createdAt: toDate(data.createdAt),
@@ -612,6 +643,33 @@ async function logAuthEvent(input: Omit<AuthLog, 'id' | 'createdAt'>) {
     ...authLog,
     id: created.id,
   };
+}
+
+async function createNotification(input: Omit<Notification, 'id' | 'read' | 'createdAt'>) {
+  if (!input.userId || !input.fromUid || input.userId === input.fromUid) {
+    return;
+  }
+
+  const notification: Notification = {
+    id: crypto.randomUUID(),
+    read: false,
+    createdAt: new Date(),
+    ...input,
+  };
+
+  try {
+    if (!firebaseEnabled) {
+      mockNotifications.unshift(cloneNotification(notification));
+      return;
+    }
+
+    const firestore = requireDb();
+    const notificationDocument = { ...notification } as Omit<Notification, 'id'> & { id?: string };
+    delete notificationDocument.id;
+    await addDoc(collection(firestore, COLLECTIONS.notifications), stripUndefinedFields(notificationDocument));
+  } catch (error) {
+    console.error('Could not create notification:', error);
+  }
 }
 
 export const authApi = {
@@ -1033,6 +1091,22 @@ export const followsApi = {
       followingUid,
       createdAt: new Date(),
     });
+
+    try {
+      const follower = await getUserByUid(followerUid);
+      const followerHandle = follower?.handle || 'creator';
+      await createNotification({
+        userId: followingUid,
+        type: 'follow',
+        fromUid: followerUid,
+        fromHandle: followerHandle,
+        fromAvatar: follower?.avatarUrl,
+        message: `@${followerHandle} started following you`,
+      });
+    } catch (error) {
+      console.error('Could not enqueue follow notification:', error);
+    }
+
     return { following: true };
   },
 };
@@ -1046,6 +1120,25 @@ export const promptsApi = {
     const firestore = requireDb();
     const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.prompts), orderBy('createdAt', 'desc')));
     return snapshot.docs.map((entry) => deserializePrompt(entry.id, entry.data() as Record<string, unknown>));
+  },
+
+  async getPromptById(promptId: string): Promise<Prompt | null> {
+    if (!promptId) {
+      return null;
+    }
+
+    if (!firebaseEnabled) {
+      const prompt = mockPrompts.find((entry) => entry.id === promptId) ?? null;
+      return prompt ? clonePrompt(prompt) : null;
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDoc(doc(firestore, COLLECTIONS.prompts, promptId));
+    if (!snapshot.exists()) {
+      return null;
+    }
+
+    return deserializePrompt(snapshot.id, snapshot.data() as Record<string, unknown>);
   },
 
   async getPromptsByAuthorUid(authorUid: string): Promise<Prompt[]> {
@@ -1154,6 +1247,70 @@ export const promptsApi = {
       .filter(Boolean);
   },
 
+  async getCopiedPromptIds(userId: string): Promise<string[]> {
+    if (!userId) {
+      return [];
+    }
+
+    if (!firebaseEnabled) {
+      return [];
+    }
+
+    const firestore = requireDb();
+    const snapshot = await getDocs(
+      query(collection(firestore, COLLECTIONS.promptCopies), where('userId', '==', userId)),
+    );
+
+    return snapshot.docs
+      .map((entry) => String(entry.data().promptId ?? ''))
+      .filter(Boolean);
+  },
+
+  async recordCopy(promptId: string, userId: string): Promise<{ counted: boolean; copies: number }> {
+    if (!userId) {
+      throw new Error('Log in to copy prompts.');
+    }
+
+    if (!firebaseEnabled) {
+      return { counted: true, copies: 0 };
+    }
+
+    const firestore = requireDb();
+    const promptRef = doc(firestore, COLLECTIONS.prompts, promptId);
+    const copyRef = doc(firestore, COLLECTIONS.promptCopies, `${promptId}_${userId}`);
+
+    return runTransaction(firestore, async (transaction) => {
+      const [promptSnapshot, copySnapshot] = await Promise.all([
+        transaction.get(promptRef),
+        transaction.get(copyRef),
+      ]);
+
+      if (!promptSnapshot.exists()) {
+        throw new Error('Prompt not found.');
+      }
+
+      const currentCopies = Number(promptSnapshot.data().copies ?? 0);
+      if (copySnapshot.exists()) {
+        return {
+          counted: false,
+          copies: currentCopies,
+        };
+      }
+
+      transaction.set(copyRef, {
+        promptId,
+        userId,
+        authorUid: String(promptSnapshot.data().authorUid ?? ''),
+        createdAt: new Date(),
+      });
+      transaction.update(promptRef, { copies: currentCopies + 1 });
+      return {
+        counted: true,
+        copies: currentCopies + 1,
+      };
+    });
+  },
+
   async toggleLike(promptId: string, userId: string): Promise<{ liked: boolean; likes: number }> {
     if (!userId) {
       throw new Error('Log in to like prompts.');
@@ -1167,7 +1324,7 @@ export const promptsApi = {
     const promptRef = doc(firestore, COLLECTIONS.prompts, promptId);
     const likeRef = doc(firestore, COLLECTIONS.promptLikes, `${promptId}_${userId}`);
 
-    return runTransaction(firestore, async (transaction) => {
+    const result = await runTransaction(firestore, async (transaction) => {
       const [promptSnapshot, likeSnapshot] = await Promise.all([
         transaction.get(promptRef),
         transaction.get(likeRef),
@@ -1177,7 +1334,9 @@ export const promptsApi = {
         throw new Error('Prompt not found.');
       }
 
+      const promptData = promptSnapshot.data();
       const currentLikes = Number(promptSnapshot.data().likes ?? 0);
+      const authorUid = String(promptData.authorUid ?? '');
 
       if (likeSnapshot.exists()) {
         transaction.delete(likeRef);
@@ -1185,6 +1344,7 @@ export const promptsApi = {
         return {
           liked: false,
           likes: Math.max(0, currentLikes - 1),
+          authorUid,
         };
       }
 
@@ -1198,8 +1358,32 @@ export const promptsApi = {
       return {
         liked: true,
         likes: currentLikes + 1,
+        authorUid,
       };
     });
+
+    if (result.liked && result.authorUid && result.authorUid !== userId) {
+      try {
+        const actor = await getUserByUid(userId);
+        const actorHandle = actor?.handle || 'creator';
+        await createNotification({
+          userId: result.authorUid,
+          type: 'like',
+          fromUid: userId,
+          fromHandle: actorHandle,
+          fromAvatar: actor?.avatarUrl,
+          promptId,
+          message: `@${actorHandle} liked your prompt`,
+        });
+      } catch (error) {
+        console.error('Could not enqueue prompt-like notification:', error);
+      }
+    }
+
+    return {
+      liked: result.liked,
+      likes: result.likes,
+    };
   },
 
   async toggleSave(promptId: string, userId: string): Promise<{ saved: boolean; saves: number }> {
@@ -1271,11 +1455,52 @@ export const promptsApi = {
       throw new Error('Only the author can delete this prompt.');
     }
 
-    const likeSnapshots = await getDocs(
-      query(collection(firestore, COLLECTIONS.promptLikes), where('promptId', '==', promptId)),
-    );
+    const mediaPaths = new Set<string>();
+    const videoPath = extractSupabaseStoragePathFromPublicUrl(promptData.videoUrl);
+    const thumbnailPath = extractSupabaseStoragePathFromPublicUrl(promptData.thumbnailUrl);
+    if (videoPath) {
+      mediaPaths.add(videoPath);
+    }
+    if (thumbnailPath) {
+      mediaPaths.add(thumbnailPath);
+    }
 
-    await Promise.all(likeSnapshots.docs.map((likeDoc) => deleteDoc(likeDoc.ref)));
+    if (mediaPaths.size > 0) {
+      if (!isSupabaseConfigured || !supabase) {
+        throw new Error('Supabase Storage is required to delete prompt media.');
+      }
+
+      const { error: storageDeleteError } = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .remove(Array.from(mediaPaths));
+
+      if (storageDeleteError) {
+        if (/row-level security/i.test(storageDeleteError.message)) {
+          throw new Error(
+            `Supabase Storage policy blocked prompt media deletion for bucket "${SUPABASE_BUCKET}". Add DELETE policies for this bucket.`,
+          );
+        }
+        throw new Error(storageDeleteError.message || 'Could not delete prompt media from Supabase Storage.');
+      }
+    }
+
+    const [likeSnapshots, saveSnapshots, copySnapshots] = await Promise.all([
+      getDocs(
+        query(collection(firestore, COLLECTIONS.promptLikes), where('promptId', '==', promptId)),
+      ),
+      getDocs(
+        query(collection(firestore, COLLECTIONS.promptSaves), where('promptId', '==', promptId)),
+      ),
+      getDocs(
+        query(collection(firestore, COLLECTIONS.promptCopies), where('promptId', '==', promptId)),
+      ),
+    ]);
+
+    await Promise.all([
+      ...likeSnapshots.docs.map((likeDoc) => deleteDoc(likeDoc.ref)),
+      ...saveSnapshots.docs.map((saveDoc) => deleteDoc(saveDoc.ref)),
+      ...copySnapshots.docs.map((copyDoc) => deleteDoc(copyDoc.ref)),
+    ]);
     await deleteDoc(promptRef);
   },
 
@@ -1318,6 +1543,23 @@ export const promptsApi = {
     };
 
     if (!firebaseEnabled) {
+      if (sourcePrompt.authorUid !== input.authorUid) {
+        try {
+          const actor = await getUserByUid(input.authorUid);
+          const actorHandle = actor?.handle || 'creator';
+          await createNotification({
+            userId: sourcePrompt.authorUid,
+            type: 'fork',
+            fromUid: input.authorUid,
+            fromHandle: actorHandle,
+            fromAvatar: actor?.avatarUrl,
+            promptId: sourcePrompt.id,
+            message: `@${actorHandle} forked your prompt`,
+          });
+        } catch (error) {
+          console.error('Could not enqueue fork notification:', error);
+        }
+      }
       return result;
     }
 
@@ -1327,6 +1569,24 @@ export const promptsApi = {
       forkedFromId: sourcePrompt.id,
       forkedFromAuthorHandle: sourcePrompt.authorHandle,
     });
+
+    if (sourcePrompt.authorUid !== input.authorUid) {
+      try {
+        const actor = await getUserByUid(input.authorUid);
+        const actorHandle = actor?.handle || 'creator';
+        await createNotification({
+          userId: sourcePrompt.authorUid,
+          type: 'fork',
+          fromUid: input.authorUid,
+          fromHandle: actorHandle,
+          fromAvatar: actor?.avatarUrl,
+          promptId: sourcePrompt.id,
+          message: `@${actorHandle} forked your prompt`,
+        });
+      } catch (error) {
+        console.error('Could not enqueue fork notification:', error);
+      }
+    }
 
     return result;
   },
@@ -1464,7 +1724,7 @@ export const workflowsApi = {
     const workflowRef = doc(firestore, COLLECTIONS.workflows, workflowId);
     const likeRef = doc(firestore, COLLECTIONS.workflowLikes, `${workflowId}_${userId}`);
 
-    return runTransaction(firestore, async (transaction) => {
+    const result = await runTransaction(firestore, async (transaction) => {
       const [workflowSnapshot, likeSnapshot] = await Promise.all([
         transaction.get(workflowRef),
         transaction.get(likeRef),
@@ -1474,7 +1734,10 @@ export const workflowsApi = {
         throw new Error('Workflow not found.');
       }
 
+      const workflowData = workflowSnapshot.data();
       const currentLikes = Number(workflowSnapshot.data().likes ?? 0);
+      const authorUid = String(workflowData.authorUid ?? '');
+      const workflowTitle = String(workflowData.title ?? '');
 
       if (likeSnapshot.exists()) {
         transaction.delete(likeRef);
@@ -1482,6 +1745,8 @@ export const workflowsApi = {
         return {
           liked: false,
           likes: Math.max(0, currentLikes - 1),
+          authorUid,
+          workflowTitle,
         };
       }
 
@@ -1494,8 +1759,35 @@ export const workflowsApi = {
       return {
         liked: true,
         likes: currentLikes + 1,
+        authorUid,
+        workflowTitle,
       };
     });
+
+    if (result.liked && result.authorUid && result.authorUid !== userId) {
+      try {
+        const actor = await getUserByUid(userId);
+        const actorHandle = actor?.handle || 'creator';
+        await createNotification({
+          userId: result.authorUid,
+          type: 'like',
+          fromUid: userId,
+          fromHandle: actorHandle,
+          fromAvatar: actor?.avatarUrl,
+          workflowId,
+          message: result.workflowTitle
+            ? `@${actorHandle} liked your workflow "${result.workflowTitle}"`
+            : `@${actorHandle} liked your workflow`,
+        });
+      } catch (error) {
+        console.error('Could not enqueue workflow-like notification:', error);
+      }
+    }
+
+    return {
+      liked: result.liked,
+      likes: result.likes,
+    };
   },
 
   async toggleSave(workflowId: string, userId: string): Promise<{ saved: boolean; saves: number }> {
@@ -1544,6 +1836,67 @@ export const workflowsApi = {
       };
     });
   },
+
+  async deleteWorkflow(workflowId: string, userId: string): Promise<void> {
+    if (!userId) {
+      throw new Error('Log in to delete workflows.');
+    }
+
+    if (!firebaseEnabled) {
+      return;
+    }
+
+    const firestore = requireDb();
+    const workflowRef = doc(firestore, COLLECTIONS.workflows, workflowId);
+    const workflowSnapshot = await getDoc(workflowRef);
+
+    if (!workflowSnapshot.exists()) {
+      throw new Error('Workflow not found.');
+    }
+
+    const workflowData = workflowSnapshot.data() as Record<string, unknown>;
+    if (String(workflowData.authorUid ?? '') !== userId) {
+      throw new Error('Only the author can delete this workflow.');
+    }
+
+    const steps = Array.isArray(workflowData.steps)
+      ? workflowData.steps.filter(
+          (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object',
+        )
+      : [];
+
+    const mediaUrls: Array<string | null | undefined> = [
+      typeof workflowData.coverVideoUrl === 'string' ? workflowData.coverVideoUrl : undefined,
+      typeof workflowData.coverThumbnailUrl === 'string' ? workflowData.coverThumbnailUrl : undefined,
+    ];
+
+    for (const step of steps) {
+      mediaUrls.push(
+        typeof step.inputImageUrl === 'string' ? step.inputImageUrl : undefined,
+        typeof step.startFrameUrl === 'string' ? step.startFrameUrl : undefined,
+        typeof step.endFrameUrl === 'string' ? step.endFrameUrl : undefined,
+        typeof step.resultMediaUrl === 'string' ? step.resultMediaUrl : undefined,
+        typeof step.resultThumbnailUrl === 'string' ? step.resultThumbnailUrl : undefined,
+      );
+    }
+
+    await uploadsApi.deletePublicMediaUrls(mediaUrls);
+
+    const [likeSnapshots, saveSnapshots] = await Promise.all([
+      getDocs(
+        query(collection(firestore, COLLECTIONS.workflowLikes), where('workflowId', '==', workflowId)),
+      ),
+      getDocs(
+        query(collection(firestore, COLLECTIONS.workflowSaves), where('workflowId', '==', workflowId)),
+      ),
+    ]);
+
+    await Promise.all([
+      ...likeSnapshots.docs.map((likeDoc) => deleteDoc(likeDoc.ref)),
+      ...saveSnapshots.docs.map((saveDoc) => deleteDoc(saveDoc.ref)),
+    ]);
+    await deleteDoc(workflowRef);
+  },
 };
 
 export const notificationsApi = {
@@ -1566,6 +1919,11 @@ export const notificationsApi = {
 
   async markAllRead(userId: string): Promise<void> {
     if (!firebaseEnabled) {
+      for (const notification of mockNotifications) {
+        if (notification.userId === userId) {
+          notification.read = true;
+        }
+      }
       return;
     }
 
@@ -1575,6 +1933,23 @@ export const notificationsApi = {
     );
 
     await Promise.all(snapshot.docs.map((entry) => updateDoc(doc(firestore, COLLECTIONS.notifications, entry.id), { read: true })));
+  },
+
+  async markRead(notificationId: string, userId: string): Promise<void> {
+    if (!notificationId || !userId) {
+      return;
+    }
+
+    if (!firebaseEnabled) {
+      const target = mockNotifications.find((entry) => entry.id === notificationId && entry.userId === userId);
+      if (target) {
+        target.read = true;
+      }
+      return;
+    }
+
+    const firestore = requireDb();
+    await updateDoc(doc(firestore, COLLECTIONS.notifications, notificationId), { read: true });
   },
 };
 
@@ -1718,5 +2093,38 @@ export const uploadsApi = {
       path: filePath,
       downloadUrl: publicUrl,
     };
+  },
+
+  async deletePublicMediaUrls(urls: Array<string | null | undefined>) {
+    const storagePaths = Array.from(
+      new Set(
+        urls
+          .map((entry) => extractSupabaseStoragePathFromPublicUrl(entry))
+          .filter((entry): entry is string => Boolean(entry)),
+      ),
+    );
+
+    if (storagePaths.length === 0) {
+      return;
+    }
+
+    if (!isSupabaseConfigured || !supabase) {
+      throw new Error(
+        'Supabase Storage is required for media deletion. Set VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, and VITE_SUPABASE_BUCKET.',
+      );
+    }
+
+    const { error } = await supabase.storage
+      .from(SUPABASE_BUCKET)
+      .remove(storagePaths);
+
+    if (error) {
+      if (/row-level security/i.test(error.message)) {
+        throw new Error(
+          `Supabase Storage policy blocked media deletion for bucket "${SUPABASE_BUCKET}". Add DELETE policies for this bucket.`,
+        );
+      }
+      throw new Error(error.message || 'Could not delete media from Supabase Storage.');
+    }
   },
 };

@@ -69,6 +69,33 @@ service cloud.firestore {
         );
     }
 
+    function isPromptCopyCounterUpdate() {
+      return isSignedIn()
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.authorHandle == resource.data.authorHandle
+        && request.resource.data.authorAvatar == resource.data.authorAvatar
+        && request.resource.data.videoUrl == resource.data.videoUrl
+        && request.resource.data.thumbnailUrl == resource.data.thumbnailUrl
+        && request.resource.data.promptText == resource.data.promptText
+        && request.resource.data.model == resource.data.model
+        && request.resource.data.contentType == resource.data.contentType
+        && request.resource.data.aspectRatio == resource.data.aspectRatio
+        && request.resource.data.styleTags == resource.data.styleTags
+        && request.resource.data.cameraNotes == resource.data.cameraNotes
+        && request.resource.data.moodLabel == resource.data.moodLabel
+        && request.resource.data.difficulty == resource.data.difficulty
+        && request.resource.data.likes == resource.data.likes
+        && request.resource.data.saves == resource.data.saves
+        && request.resource.data.forks == resource.data.forks
+        && request.resource.data.isForked == resource.data.isForked
+        && request.resource.data.forkedFromId == resource.data.forkedFromId
+        && request.resource.data.forkedFromAuthorHandle == resource.data.forkedFromAuthorHandle
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.mediaWidth == resource.data.mediaWidth
+        && request.resource.data.mediaHeight == resource.data.mediaHeight
+        && request.resource.data.copies == resource.data.copies + 1;
+    }
+
     function isPromptAuthor(promptId) {
       return isSignedIn()
         && get(/databases/$(database)/documents/prompts/$(promptId)).data.authorUid == request.auth.uid;
@@ -133,6 +160,7 @@ service cloud.firestore {
           resource.data.authorUid == request.auth.uid
           || isPromptLikeCounterUpdate()
           || isPromptSaveCounterUpdate()
+          || isPromptCopyCounterUpdate()
         );
       allow delete: if isSignedIn() && resource.data.authorUid == request.auth.uid;
     }
@@ -162,6 +190,19 @@ service cloud.firestore {
     }
 
     match /promptSaves/{saveId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource == null
+        || resource.data.userId == request.auth.uid
+        || isPromptAuthor(resource.data.promptId)
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid
+        || isPromptAuthor(resource.data.promptId)
+      );
+    }
+
+    match /promptCopies/{copyId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read: if isSignedIn() && (
         resource == null

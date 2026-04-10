@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { ArrowLeft, Twitter, Instagram, Youtube, Globe } from 'lucide-react';
-import { authApi, followsApi, promptsApi, usersApi } from '../../lib/backend';
+import { followsApi, promptsApi, usersApi, workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
 import { useBackendQuery } from '../../lib/useBackendQuery';
 import { truncateText } from '../../lib/text';
@@ -22,14 +22,13 @@ function buildExternalUrl(rawUrl?: string) {
 export function UserProfile() {
   const { handle } = useParams<{ handle: string }>();
   const navigate = useNavigate();
-  const { user: authUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'prompts' | 'forks'>('prompts');
+  const { user: activeUser, isLoading: authIsLoading } = useAuth();
+  const [activeTab, setActiveTab] = useState<'prompts' | 'forks' | 'workflows'>('prompts');
   const [isFollowing, setIsFollowing] = useState(false);
   const [followerCount, setFollowerCount] = useState(0);
-  const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
-  const activeUser = authUser ?? currentUser;
-  const { data: users } = useBackendQuery(() => usersApi.getAllUsers(), [], []);
+  const { data: users, isLoading: usersAreLoading } = useBackendQuery(() => usersApi.getAllUsers(), [], []);
   const { data: prompts } = useBackendQuery(() => promptsApi.getFeedPrompts(), [], []);
+  const { data: workflows } = useBackendQuery(() => workflowsApi.getFeedWorkflows(), [], []);
 
   const profileUser = users.find((entry) => entry.handle === handle);
 
@@ -55,6 +54,14 @@ export function UserProfile() {
     setIsFollowing(fetchedIsFollowing);
   }, [fetchedIsFollowing]);
 
+  if (usersAreLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="font-accent text-[var(--cuerate-text-2)]">Loading profile...</p>
+      </div>
+    );
+  }
+
   if (!profileUser) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -65,12 +72,17 @@ export function UserProfile() {
 
   const userPrompts = prompts.filter((prompt) => prompt.authorUid === profileUser.uid);
   const userForks = prompts.filter((prompt) => prompt.isForked && prompt.authorUid === profileUser.uid);
+  const userWorkflows = workflows.filter((workflow) => workflow.authorUid === profileUser.uid);
   const displayName = truncateText(profileUser.displayName, 28);
   const displayHandle = truncateText(profileUser.handle, 20);
 
   const tabContent = activeTab === 'prompts' ? userPrompts : userForks;
 
   const handleToggleFollow = () => {
+    if (authIsLoading) {
+      return;
+    }
+
     if (!activeUser) {
       navigate('/auth');
       return;
@@ -118,7 +130,7 @@ export function UserProfile() {
             <img
               src={profileUser.avatarUrl}
               alt={profileUser.handle}
-              className="w-32 h-32 rounded-full border-4 border-[var(--cuerate-indigo)] indigo-glow"
+              className="w-32 h-32 rounded-full border-4 border-[var(--cuerate-indigo)] indigo-glow object-cover object-center"
             />
           </div>
           <h2 className="max-w-[280px] truncate font-primary font-bold text-xl text-[var(--cuerate-text-1)] mb-0.5" title={profileUser.displayName}>
@@ -185,6 +197,7 @@ export function UserProfile() {
           <div className="flex justify-center">
             <button
               onClick={handleToggleFollow}
+              disabled={authIsLoading}
               className={`px-12 py-2.5 rounded-[var(--cuerate-r-pill)] font-accent font-medium transition-all ${
                 isFollowing
                   ? 'glass-surface border border-[var(--cuerate-indigo)] text-[var(--cuerate-indigo)] hover:bg-[var(--cuerate-indigo)]/10'
@@ -196,7 +209,7 @@ export function UserProfile() {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3 p-4 rounded-[var(--cuerate-r-pill)] glass-surface">
+        <div className="grid grid-cols-2 gap-3 p-4 rounded-[var(--cuerate-r-pill)] glass-surface">
           <div className="text-center">
             <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
               {userPrompts.length}
@@ -209,17 +222,11 @@ export function UserProfile() {
             </p>
             <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Followers</p>
           </div>
-          <div className="text-center">
-            <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
-              {profileUser.totalCopies}
-            </p>
-            <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Copies</p>
-          </div>
         </div>
 
         <div className="border-b border-[var(--cuerate-text-3)]">
           <div className="flex w-full items-center justify-around">
-            {(['prompts', 'forks'] as const).map((tab) => (
+            {(['prompts', 'forks', 'workflows'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -238,33 +245,82 @@ export function UserProfile() {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          {tabContent.length > 0 ? (
-            tabContent.map((prompt) => (
-              <div
-                key={prompt.id}
-                className="relative aspect-square rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
-              >
-                <img
-                  src={prompt.thumbnailUrl}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute bottom-1 left-1 px-2 py-0.5 rounded-[var(--cuerate-r-pill)] glass-surface">
-                  <span className="font-accent text-[10px] text-[var(--cuerate-text-1)]">
-                    {prompt.copies}
-                  </span>
+        {activeTab === 'workflows' ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {userWorkflows.length > 0 ? (
+              userWorkflows.map((workflow) => (
+                <div
+                  key={workflow.id}
+                  className="relative aspect-video rounded-[var(--cuerate-r-lg)] overflow-hidden cursor-pointer hover:opacity-85 transition-opacity"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/workflow/${workflow.id}`)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                      return;
+                    }
+                    event.preventDefault();
+                    navigate(`/workflow/${workflow.id}`);
+                  }}
+                  aria-label={`Open workflow ${workflow.title}`}
+                >
+                  <img
+                    src={workflow.coverThumbnailUrl}
+                    alt={workflow.title}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
+                  <div className="absolute top-2 left-2 px-2 py-1 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-[10px] text-[var(--cuerate-text-1)]">
+                    {workflow.tool}
+                  </div>
+                  <div className="absolute bottom-2 left-2 right-2">
+                    <p className="font-primary text-sm text-white truncate">{workflow.title}</p>
+                  </div>
                 </div>
+              ))
+            ) : (
+              <div className="col-span-1 md:col-span-2 py-12 text-center">
+                <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                  No workflows yet
+                </p>
               </div>
-            ))
-          ) : (
-            <div className="col-span-3 py-12 text-center">
-              <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
-                No {activeTab} yet
-              </p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {tabContent.length > 0 ? (
+              tabContent.map((prompt) => (
+                <div
+                  key={prompt.id}
+                  className="relative aspect-square rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/prompt/${prompt.id}`)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                      return;
+                    }
+                    event.preventDefault();
+                    navigate(`/prompt/${prompt.id}`);
+                  }}
+                  aria-label={`Open prompt by ${prompt.authorHandle}`}
+                >
+                  <img
+                    src={prompt.thumbnailUrl}
+                    alt={`Prompt by ${prompt.authorHandle}`}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              ))
+            ) : (
+              <div className="col-span-2 md:col-span-3 lg:col-span-4 py-12 text-center">
+                <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                  No {activeTab} yet
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

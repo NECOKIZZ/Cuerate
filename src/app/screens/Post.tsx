@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2, Sparkles, Upload, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
-import { authApi, metaApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
+import { metaApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
 import {
   createVideoThumbnailFile,
@@ -56,7 +56,7 @@ function getExpectedResultType(type: WorkflowGenerationType): PromptContentType 
 
 export function Post() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user: activeUser, isLoading: authIsLoading } = useAuth();
   const [postMode, setPostMode] = useState<PostMode>('prompt');
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -84,8 +84,6 @@ export function Post() {
   const { data: availableStyleTags } = useBackendQuery(() => metaApi.getAvailableStyleTags(), [], []);
   const { data: availableMoodLabels } = useBackendQuery(() => metaApi.getAvailableMoodLabels(), [], []);
   const { data: difficultyLevels } = useBackendQuery(() => metaApi.getDifficultyLevels(), [], []);
-  const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
-  const activeUser = user ?? currentUser;
 
   const handleAutoFill = async () => {
     setIsAutoFilling(true);
@@ -329,6 +327,19 @@ export function Post() {
 
   const workflowCanPublish = workflowTitle.trim() && workflowTool.trim() && workflowCoverFile;
   const promptCanPublish = promptText.trim() && selectedModel && mediaFile;
+
+  if (authIsLoading && !activeUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full glass-surface rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] p-8 text-center">
+          <span className="inline-flex items-center gap-2 font-accent text-sm text-[var(--cuerate-text-2)]">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading your account...
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   if (!activeUser) {
     return (

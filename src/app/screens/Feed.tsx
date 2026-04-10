@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router';
 import { PromptCard } from '../components/PromptCard';
 import { WorkflowCard } from '../components/WorkflowCard';
 import { ForkPromptModal } from '../components/ForkPromptModal';
-import { authApi, followsApi, metaApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
+import { followsApi, metaApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
 import { createVideoThumbnailFile, detectImageFileDimensions, detectVideoFileDimensions } from '../../lib/media';
 import { useBackendQuery } from '../../lib/useBackendQuery';
@@ -13,7 +13,7 @@ import { truncateText } from '../../lib/text';
 
 export function Feed() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user: activeUser, isLoading: authIsLoading } = useAuth();
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
   const [contentType, setContentType] = useState<'all' | 'image' | 'video'>('all');
   const [hasUnreadNotifications] = useState(true);
@@ -21,6 +21,7 @@ export function Feed() {
   const [likedPrompts, setLikedPrompts] = useState<Set<string>>(new Set());
   const [savedPrompts, setSavedPrompts] = useState<Set<string>>(new Set());
   const [copiedPrompts, setCopiedPrompts] = useState<Set<string>>(new Set());
+  const [countedCopiedPrompts, setCountedCopiedPrompts] = useState<Set<string>>(new Set());
   const [forkModalPrompt, setForkModalPrompt] = useState<Prompt | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [promptOverrides, setPromptOverrides] = useState<Record<string, Prompt>>({});
@@ -33,8 +34,6 @@ export function Feed() {
   const { data: workflows } = useBackendQuery(() => workflowsApi.getFeedWorkflows(), [], []);
   const { data: availableModels } = useBackendQuery(() => metaApi.getAvailableModels(), [], []);
   const { data: availableStyleTags } = useBackendQuery(() => metaApi.getAvailableStyleTags(), [], []);
-  const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
-  const activeUser = user ?? currentUser;
   const { data: likedPromptIds } = useBackendQuery(
     () => (activeUser ? promptsApi.getLikedPromptIds(activeUser.uid) : Promise.resolve([])),
     [],
@@ -42,6 +41,11 @@ export function Feed() {
   );
   const { data: savedPromptIds } = useBackendQuery(
     () => (activeUser ? promptsApi.getSavedPromptIds(activeUser.uid) : Promise.resolve([])),
+    [],
+    [activeUser?.uid],
+  );
+  const { data: copiedPromptIds } = useBackendQuery(
+    () => (activeUser ? promptsApi.getCopiedPromptIds(activeUser.uid) : Promise.resolve([])),
     [],
     [activeUser?.uid],
   );
@@ -104,6 +108,19 @@ export function Feed() {
         : `${selectedFilterCount} filters`;
   const displayNavHandle = activeUser ? truncateText(activeUser.handle, 14) : null;
 
+  const getAuthedUser = () => {
+    if (authIsLoading) {
+      return null;
+    }
+
+    if (!activeUser) {
+      navigate('/auth');
+      return null;
+    }
+
+    return activeUser;
+  };
+
   const hasWorkflowFilter = selectedFilters.has('Workflow');
   const activeNonWorkflowFilters = Array.from(selectedFilters).filter(
     (entry) => entry !== 'Workflow',
@@ -118,6 +135,10 @@ export function Feed() {
   }, [savedPromptIds]);
 
   useEffect(() => {
+    setCountedCopiedPrompts(new Set(copiedPromptIds));
+  }, [copiedPromptIds]);
+
+  useEffect(() => {
     setFollowedUsers(new Set(followingUserIds));
   }, [followingUserIds]);
 
@@ -130,12 +151,12 @@ export function Feed() {
   }, [savedWorkflowIds]);
 
   const handleFollow = (authorUid: string) => {
-    if (!activeUser) {
-      navigate('/auth');
+    const viewer = getAuthedUser();
+    if (!viewer) {
       return;
     }
 
-    if (authorUid === activeUser.uid) {
+    if (authorUid === viewer.uid) {
       return;
     }
 
@@ -150,7 +171,7 @@ export function Feed() {
       return next;
     });
 
-    void followsApi.toggleFollow(activeUser.uid, authorUid).then((result) => {
+    void followsApi.toggleFollow(viewer.uid, authorUid).then((result) => {
       setFollowedUsers((prev) => {
         const next = new Set(prev);
         if (result.following) {
@@ -175,8 +196,8 @@ export function Feed() {
   };
 
   const handleLike = (promptId: string) => {
-    if (!activeUser) {
-      navigate('/auth');
+    const viewer = getAuthedUser();
+    if (!viewer) {
       return;
     }
 
@@ -206,7 +227,7 @@ export function Feed() {
     }));
 
     void promptsApi
-      .toggleLike(promptId, activeUser.uid)
+      .toggleLike(promptId, viewer.uid)
       .then((result) => {
         setLikedPrompts((prev) => {
           const newSet = new Set(prev);
@@ -245,8 +266,8 @@ export function Feed() {
   };
 
   const handleSave = (promptId: string) => {
-    if (!activeUser) {
-      navigate('/auth');
+    const viewer = getAuthedUser();
+    if (!viewer) {
       return;
     }
 
@@ -276,7 +297,7 @@ export function Feed() {
     }));
 
     void promptsApi
-      .toggleSave(promptId, activeUser.uid)
+      .toggleSave(promptId, viewer.uid)
       .then((result) => {
         setSavedPrompts((prev) => {
           const next = new Set(prev);
@@ -335,11 +356,61 @@ export function Feed() {
         return newSet;
       });
     }, 2000);
+
+    if (authIsLoading || !activeUser || countedCopiedPrompts.has(promptId)) {
+      return;
+    }
+
+    const targetPrompt = hydratedPrompts.find((entry) => entry.id === promptId);
+    if (!targetPrompt) {
+      return;
+    }
+
+    setCountedCopiedPrompts((prev) => {
+      const next = new Set(prev);
+      next.add(promptId);
+      return next;
+    });
+    setPromptOverrides((prev) => ({
+      ...prev,
+      [promptId]: {
+        ...targetPrompt,
+        copies: targetPrompt.copies + 1,
+      },
+    }));
+
+    void promptsApi
+      .recordCopy(promptId, activeUser.uid)
+      .then((result) => {
+        setCountedCopiedPrompts((prev) => {
+          const next = new Set(prev);
+          next.add(promptId);
+          return next;
+        });
+        setPromptOverrides((prev) => ({
+          ...prev,
+          [promptId]: {
+            ...(prev[promptId] ?? targetPrompt),
+            copies: result.copies,
+          },
+        }));
+      })
+      .catch(() => {
+        setCountedCopiedPrompts((prev) => {
+          const next = new Set(prev);
+          next.delete(promptId);
+          return next;
+        });
+        setPromptOverrides((prev) => ({
+          ...prev,
+          [promptId]: targetPrompt,
+        }));
+      });
   };
 
   const handleWorkflowLike = (workflowId: string) => {
-    if (!activeUser) {
-      navigate('/auth');
+    const viewer = getAuthedUser();
+    if (!viewer) {
       return;
     }
 
@@ -369,7 +440,7 @@ export function Feed() {
     }));
 
     void workflowsApi
-      .toggleLike(workflowId, activeUser.uid)
+      .toggleLike(workflowId, viewer.uid)
       .then((result) => {
         setLikedWorkflows((prev) => {
           const next = new Set(prev);
@@ -408,8 +479,8 @@ export function Feed() {
   };
 
   const handleWorkflowSave = (workflowId: string) => {
-    if (!activeUser) {
-      navigate('/auth');
+    const viewer = getAuthedUser();
+    if (!viewer) {
       return;
     }
 
@@ -439,7 +510,7 @@ export function Feed() {
     }));
 
     void workflowsApi
-      .toggleSave(workflowId, activeUser.uid)
+      .toggleSave(workflowId, viewer.uid)
       .then((result) => {
         setSavedWorkflows((prev) => {
           const next = new Set(prev);
@@ -683,11 +754,17 @@ export function Feed() {
             </div>
 
             <button
-              onClick={() => navigate(activeUser ? '/profile' : '/auth')}
+              onClick={() => {
+                if (authIsLoading) {
+                  return;
+                }
+                navigate(activeUser ? '/profile' : '/auth');
+              }}
+              disabled={authIsLoading}
               className="max-w-[180px] truncate px-6 py-2 rounded-[var(--cuerate-r-pill)] bg-[var(--cuerate-indigo)] text-white font-accent text-sm font-medium indigo-glow hover:opacity-90 transition-all"
-              title={activeUser ? `@${activeUser.handle}` : 'Login'}
+              title={authIsLoading ? 'Loading account' : activeUser ? `@${activeUser.handle}` : 'Login'}
             >
-              {displayNavHandle ? `@${displayNavHandle}` : 'Login'}
+              {authIsLoading ? 'Loading...' : displayNavHandle ? `@${displayNavHandle}` : 'Login'}
             </button>
           </div>
         </div>
@@ -731,8 +808,8 @@ export function Feed() {
           prompt={forkModalPrompt}
           onClose={() => setForkModalPrompt(null)}
           onSave={async ({ forkedPrompt, mediaFile }) => {
-            if (!activeUser) {
-              navigate('/auth');
+            const viewer = getAuthedUser();
+            if (!viewer) {
               return;
             }
 
@@ -753,9 +830,9 @@ export function Feed() {
                 mediaHeight = dimensions.height;
                 aspectRatio = dimensions.height > dimensions.width ? 'portrait' : 'landscape';
 
-                const uploadedVideo = await uploadsApi.uploadPromptMedia(mediaFile, activeUser.uid);
+                const uploadedVideo = await uploadsApi.uploadPromptMedia(mediaFile, viewer.uid);
                 const thumbnailFile = await createVideoThumbnailFile(mediaFile);
-                const uploadedThumbnail = await uploadsApi.uploadPromptMedia(thumbnailFile, activeUser.uid);
+                const uploadedThumbnail = await uploadsApi.uploadPromptMedia(thumbnailFile, viewer.uid);
                 uploadedVideoUrl = uploadedVideo.downloadUrl;
                 uploadedThumbnailUrl = uploadedThumbnail.downloadUrl;
               } else {
@@ -768,7 +845,7 @@ export function Feed() {
                 mediaHeight = dimensions.height;
                 aspectRatio = dimensions.height > dimensions.width ? 'portrait' : 'landscape';
 
-                const uploadedImage = await uploadsApi.uploadPromptMedia(mediaFile, activeUser.uid);
+                const uploadedImage = await uploadsApi.uploadPromptMedia(mediaFile, viewer.uid);
                 uploadedVideoUrl = '';
                 uploadedThumbnailUrl = uploadedImage.downloadUrl;
               }
@@ -776,7 +853,7 @@ export function Feed() {
 
             const createdFork = await promptsApi.forkPrompt({
               sourcePromptId: forkModalPrompt.id,
-              authorUid: activeUser.uid,
+              authorUid: viewer.uid,
               promptText: forkedPrompt.promptText ?? forkModalPrompt.promptText,
               model: forkedPrompt.model ?? forkModalPrompt.model,
               styleTags: forkedPrompt.styleTags ?? forkModalPrompt.styleTags,

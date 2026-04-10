@@ -1,11 +1,11 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { Camera, Globe, Instagram, Loader2, LogOut, Trash2, Twitter, X, Youtube } from 'lucide-react';
-import { Link } from 'react-router';
-import { authApi, followsApi, promptsApi, uploadsApi } from '../../lib/backend';
+import { Link, useNavigate } from 'react-router';
+import { authApi, followsApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
 import { useBackendQuery } from '../../lib/useBackendQuery';
 import { useAuth } from '../../lib/auth-context';
 import { truncateText } from '../../lib/text';
-import { User } from '../../lib/types';
+import { Prompt, User, Workflow } from '../../lib/types';
 
 function buildExternalUrl(rawUrl?: string) {
   const value = rawUrl?.trim();
@@ -21,9 +21,14 @@ function buildExternalUrl(rawUrl?: string) {
 }
 
 export function MyProfile() {
-  const [activeTab, setActiveTab] = useState<'prompts' | 'forks' | 'saves'>('prompts');
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<'prompts' | 'forks' | 'saves' | 'workflows'>('prompts');
   const [deletingPromptId, setDeletingPromptId] = useState<string | null>(null);
+  const [promptPendingDelete, setPromptPendingDelete] = useState<Prompt | null>(null);
   const [removedPromptIds, setRemovedPromptIds] = useState<Set<string>>(new Set());
+  const [deletingWorkflowId, setDeletingWorkflowId] = useState<string | null>(null);
+  const [workflowPendingDelete, setWorkflowPendingDelete] = useState<Workflow | null>(null);
+  const [removedWorkflowIds, setRemovedWorkflowIds] = useState<Set<string>>(new Set());
   const [profile, setProfile] = useState<User | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
@@ -36,9 +41,9 @@ export function MyProfile() {
   const [draftInstagram, setDraftInstagram] = useState('');
   const [draftYoutube, setDraftYoutube] = useState('');
   const [draftWebsite, setDraftWebsite] = useState('');
-  const { signOut } = useAuth();
-  const { data: currentUser } = useBackendQuery(() => authApi.getCurrentUser(), null, []);
+  const { user: authUser, isLoading: authIsLoading, signOut } = useAuth();
   const { data: prompts } = useBackendQuery(() => promptsApi.getFeedPrompts(), [], []);
+  const { data: workflows } = useBackendQuery(() => workflowsApi.getFeedWorkflows(), [], []);
   const { data: savedPromptIds } = useBackendQuery(
     () => (profile?.uid ? promptsApi.getSavedPromptIds(profile.uid) : Promise.resolve([])),
     [],
@@ -56,8 +61,8 @@ export function MyProfile() {
   );
 
   useEffect(() => {
-    setProfile(currentUser);
-  }, [currentUser]);
+    setProfile(authUser);
+  }, [authUser]);
 
   useEffect(() => {
     return () => {
@@ -66,6 +71,19 @@ export function MyProfile() {
       }
     };
   }, [avatarPreviewUrl]);
+
+  if (authIsLoading && !profile) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full glass-surface rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] p-8 text-center">
+          <span className="inline-flex items-center gap-2 font-accent text-sm text-[var(--cuerate-text-2)]">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading your profile...
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   if (!profile) {
     return (
@@ -90,10 +108,11 @@ export function MyProfile() {
   const userPrompts = visiblePrompts.filter((prompt) => prompt.authorUid === profile.uid);
   const userForks = userPrompts.filter((prompt) => prompt.isForked);
   const savedPrompts = visiblePrompts.filter((prompt) => savedPromptIds.includes(prompt.id));
-  const copiesCount = userPrompts.reduce((total, prompt) => total + prompt.copies, 0);
+  const visibleWorkflows = workflows.filter((workflow) => !removedWorkflowIds.has(workflow.id));
+  const userWorkflows = visibleWorkflows.filter((workflow) => workflow.authorUid === profile.uid);
   const displayHandle = truncateText(profile.handle, 20);
 
-  const tabContent = (() => {
+  const promptTabContent: Prompt[] = (() => {
     switch (activeTab) {
       case 'prompts':
         return userPrompts;
@@ -146,6 +165,7 @@ export function MyProfile() {
   const handleSaveProfile = async () => {
     setIsSavingProfile(true);
     setProfileError(null);
+    const previousAvatarUrl = profile.avatarUrl;
 
     try {
       let nextAvatarUrl = profile.avatarUrl;
@@ -175,6 +195,12 @@ export function MyProfile() {
       }
       setAvatarPreviewUrl(null);
       setAvatarFile(null);
+
+      if (avatarFile && previousAvatarUrl && previousAvatarUrl !== nextAvatarUrl) {
+        void uploadsApi.deletePublicMediaUrls([previousAvatarUrl]).catch((error) => {
+          console.error('Could not delete old profile avatar:', error);
+        });
+      }
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : 'Could not save your profile.');
     } finally {
@@ -183,11 +209,6 @@ export function MyProfile() {
   };
 
   const handleDeletePrompt = async (promptId: string) => {
-    const confirmed = window.confirm('Delete this post? This cannot be undone.');
-    if (!confirmed) {
-      return;
-    }
-
     setDeletingPromptId(promptId);
 
     try {
@@ -197,10 +218,29 @@ export function MyProfile() {
         next.add(promptId);
         return next;
       });
+      setPromptPendingDelete(null);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Could not delete this post.');
     } finally {
       setDeletingPromptId(null);
+    }
+  };
+
+  const handleDeleteWorkflow = async (workflowId: string) => {
+    setDeletingWorkflowId(workflowId);
+
+    try {
+      await workflowsApi.deleteWorkflow(workflowId, profile.uid);
+      setRemovedWorkflowIds((prev) => {
+        const next = new Set(prev);
+        next.add(workflowId);
+        return next;
+      });
+      setWorkflowPendingDelete(null);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not delete this workflow.');
+    } finally {
+      setDeletingWorkflowId(null);
     }
   };
 
@@ -221,7 +261,7 @@ export function MyProfile() {
               <img
                 src={avatarPreviewUrl ?? profile.avatarUrl}
                 alt={profile.handle}
-                className="w-32 h-32 rounded-full border-4 border-[var(--cuerate-indigo)] indigo-glow"
+                className="w-32 h-32 rounded-full border-4 border-[var(--cuerate-indigo)] indigo-glow object-cover object-center"
               />
             </div>
             <h2 className="max-w-[280px] truncate font-primary font-bold text-xl text-[var(--cuerate-text-1)] mb-1" title={`@${profile.handle}`}>
@@ -282,7 +322,7 @@ export function MyProfile() {
 
           </div>
 
-          <div className="grid grid-cols-4 gap-3 p-4 rounded-[var(--cuerate-r-pill)] glass-surface">
+          <div className="grid grid-cols-3 gap-3 p-4 rounded-[var(--cuerate-r-pill)] glass-surface">
             <div className="text-center">
               <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
                 {userPrompts.length}
@@ -300,12 +340,6 @@ export function MyProfile() {
                 {followingCount}
               </p>
               <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Following</p>
-            </div>
-            <div className="text-center">
-              <p className="font-primary font-bold text-lg text-[var(--cuerate-text-1)]">
-                {copiesCount}
-              </p>
-              <p className="font-accent text-xs text-[var(--cuerate-text-2)]">Copies</p>
             </div>
           </div>
 
@@ -328,7 +362,7 @@ export function MyProfile() {
 
           <div className="border-b border-[var(--cuerate-text-3)]">
             <div className="flex w-full items-center justify-around">
-              {(['prompts', 'forks', 'saves'] as const).map((tab) => (
+              {(['prompts', 'forks', 'saves', 'workflows'] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -347,46 +381,106 @@ export function MyProfile() {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-            {tabContent.length > 0 ? (
-              tabContent.map((prompt) => (
-                <div
-                  key={prompt.id}
-                  className="relative aspect-square rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
-                >
-                  <img
-                    src={prompt.thumbnailUrl}
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute bottom-1 left-1 px-2 py-0.5 rounded-[var(--cuerate-r-pill)] glass-surface">
-                    <span className="font-accent text-[10px] text-[var(--cuerate-text-1)]">
-                      {prompt.copies}
-                    </span>
-                  </div>
-                  {activeTab === 'prompts' && prompt.authorUid === profile.uid && (
+          {activeTab === 'workflows' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {userWorkflows.length > 0 ? (
+                userWorkflows.map((workflow: Workflow) => (
+                  <div
+                    key={workflow.id}
+                    className="relative aspect-video rounded-[var(--cuerate-r-lg)] overflow-hidden cursor-pointer hover:opacity-85 transition-opacity"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigate(`/workflow/${workflow.id}`)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') {
+                        return;
+                      }
+                      event.preventDefault();
+                      navigate(`/workflow/${workflow.id}`);
+                    }}
+                    aria-label={`Open workflow ${workflow.title}`}
+                  >
+                    <img
+                      src={workflow.coverThumbnailUrl}
+                      alt={workflow.title}
+                      className="w-full h-full object-cover"
+                    />
                     <button
                       onClick={(event) => {
                         event.stopPropagation();
-                        void handleDeletePrompt(prompt.id);
+                        setWorkflowPendingDelete(workflow);
                       }}
-                      disabled={deletingPromptId === prompt.id}
-                      className="absolute top-1 right-1 p-2 rounded-full bg-black/60 hover:bg-red-500/80 transition-colors disabled:opacity-60"
-                      aria-label="Delete post"
+                      disabled={deletingWorkflowId === workflow.id}
+                      className="absolute top-1 right-1 z-10 p-2 rounded-full bg-black/60 hover:bg-red-500/80 transition-colors disabled:opacity-60"
+                      aria-label="Delete workflow"
                     >
                       <Trash2 className="h-4 w-4 text-white" />
                     </button>
-                  )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
+                    <div className="absolute top-2 left-2 px-2 py-1 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-[10px] text-[var(--cuerate-text-1)]">
+                      {workflow.tool}
+                    </div>
+                    <div className="absolute bottom-2 left-2 right-2">
+                      <p className="font-primary text-sm text-white truncate">{workflow.title}</p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="col-span-1 md:col-span-2 py-12 text-center">
+                  <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                    No workflows yet
+                  </p>
                 </div>
-              ))
-            ) : (
-              <div className="col-span-3 md:col-span-4 lg:col-span-5 py-12 text-center">
-                <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
-                  No {activeTab} yet
-                </p>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {promptTabContent.length > 0 ? (
+                promptTabContent.map((prompt) => (
+                  <div
+                    key={prompt.id}
+                    className="relative aspect-square rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigate(`/prompt/${prompt.id}`)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') {
+                        return;
+                      }
+                      event.preventDefault();
+                      navigate(`/prompt/${prompt.id}`);
+                    }}
+                    aria-label={`Open prompt by ${prompt.authorHandle}`}
+                  >
+                    <img
+                      src={prompt.thumbnailUrl}
+                      alt={`Prompt by ${prompt.authorHandle}`}
+                      className="w-full h-full object-cover"
+                    />
+                    {(activeTab === 'prompts' || activeTab === 'forks') && prompt.authorUid === profile.uid && (
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setPromptPendingDelete(prompt);
+                        }}
+                        disabled={deletingPromptId === prompt.id}
+                        className="absolute top-1 right-1 p-2 rounded-full bg-black/60 hover:bg-red-500/80 transition-colors disabled:opacity-60"
+                        aria-label="Delete post"
+                      >
+                        <Trash2 className="h-4 w-4 text-white" />
+                      </button>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className="col-span-2 md:col-span-3 lg:col-span-4 py-12 text-center">
+                  <p className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                    No {activeTab} yet
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -494,6 +588,104 @@ export function MyProfile() {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {workflowPendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[var(--cuerate-r-xl)] border border-red-500/30 bg-[var(--cuerate-bg)] p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-primary text-xl font-semibold text-[var(--cuerate-text-1)]">Delete workflow?</h3>
+              <button
+                onClick={() => setWorkflowPendingDelete(null)}
+                disabled={deletingWorkflowId === workflowPendingDelete.id}
+                className="rounded-full p-2 hover:bg-[var(--cuerate-surface)] disabled:opacity-50"
+                aria-label="Close delete workflow confirmation dialog"
+              >
+                <X className="h-4 w-4 text-[var(--cuerate-text-2)]" />
+              </button>
+            </div>
+
+            <p className="mb-1 font-accent text-sm text-[var(--cuerate-text-1)]">
+              This action cannot be undone.
+            </p>
+            <p className="mb-5 font-accent text-xs text-[var(--cuerate-text-2)]">
+              The workflow, its steps, and uploaded media files will be permanently deleted.
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setWorkflowPendingDelete(null)}
+                disabled={deletingWorkflowId === workflowPendingDelete.id}
+                className="flex-1 rounded-[var(--cuerate-r-pill)] border border-[var(--cuerate-text-3)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-2)] hover:bg-[var(--cuerate-surface)] disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleDeleteWorkflow(workflowPendingDelete.id)}
+                disabled={deletingWorkflowId === workflowPendingDelete.id}
+                className="flex-1 rounded-[var(--cuerate-r-pill)] border border-red-500/40 bg-red-500/20 px-4 py-3 font-accent text-sm font-medium text-red-200 hover:bg-red-500/30 disabled:opacity-60"
+              >
+                {deletingWorkflowId === workflowPendingDelete.id ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Deleting...
+                  </span>
+                ) : (
+                  'Delete Workflow'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {promptPendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[var(--cuerate-r-xl)] border border-red-500/30 bg-[var(--cuerate-bg)] p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-primary text-xl font-semibold text-[var(--cuerate-text-1)]">Delete post?</h3>
+              <button
+                onClick={() => setPromptPendingDelete(null)}
+                disabled={deletingPromptId === promptPendingDelete.id}
+                className="rounded-full p-2 hover:bg-[var(--cuerate-surface)] disabled:opacity-50"
+                aria-label="Close delete confirmation dialog"
+              >
+                <X className="h-4 w-4 text-[var(--cuerate-text-2)]" />
+              </button>
+            </div>
+
+            <p className="mb-1 font-accent text-sm text-[var(--cuerate-text-1)]">
+              This action cannot be undone.
+            </p>
+            <p className="mb-5 font-accent text-xs text-[var(--cuerate-text-2)]">
+              The post and its uploaded media files will be permanently deleted.
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPromptPendingDelete(null)}
+                disabled={deletingPromptId === promptPendingDelete.id}
+                className="flex-1 rounded-[var(--cuerate-r-pill)] border border-[var(--cuerate-text-3)] px-4 py-3 font-accent text-sm text-[var(--cuerate-text-2)] hover:bg-[var(--cuerate-surface)] disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleDeletePrompt(promptPendingDelete.id)}
+                disabled={deletingPromptId === promptPendingDelete.id}
+                className="flex-1 rounded-[var(--cuerate-r-pill)] border border-red-500/40 bg-red-500/20 px-4 py-3 font-accent text-sm font-medium text-red-200 hover:bg-red-500/30 disabled:opacity-60"
+              >
+                {deletingPromptId === promptPendingDelete.id ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Deleting...
+                  </span>
+                ) : (
+                  'Delete Post'
+                )}
+              </button>
             </div>
           </div>
         </div>

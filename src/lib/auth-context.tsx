@@ -20,13 +20,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    authApi.getCurrentUser().then((currentUser) => {
-      if (mounted) {
-        setUser(currentUser);
-        setIsLoading(false);
-      }
-    });
-
     const unsubscribe = authApi.subscribe((currentUser) => {
       if (mounted) {
         setUser(currentUser);

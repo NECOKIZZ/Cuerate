@@ -57,7 +57,7 @@ export function WorkflowCard({
           <img
             src={workflow.authorAvatar}
             alt={workflow.authorHandle}
-            className="h-[34px] w-[34px] rounded-full border-2 border-[#f5a623]"
+            className="h-[34px] w-[34px] rounded-full border-2 border-[#f5a623] object-cover object-center"
           />
           <div className="min-w-0">
             <button

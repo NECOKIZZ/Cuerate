@@ -10,13 +10,14 @@ export function Layout() {
   const [hasUnreadNotifications] = useState(true);
   const { user, signOut } = useAuth();
   const displayHandle = user ? truncateText(user.handle, 16) : null;
+  const isPromptDetailRoute = location.pathname.startsWith('/prompt/');
 
   const navItems = [
     { path: '/', icon: Home, label: 'Feed' },
     { path: '/explore', icon: Compass, label: 'Explore' },
     { path: '/post', icon: PlusCircle, label: 'Post' },
     { path: '/profile', icon: User, label: 'Profile' },
-  ];
+  ].filter((entry) => !(isPromptDetailRoute && entry.path === '/post'));
 
   const desktopNavItems = [
     { path: '/', icon: Home, label: 'Feed' },
@@ -122,12 +123,14 @@ export function Layout() {
       </aside>
 
       {/* Desktop Floating Action Button */}
-      <button
-        onClick={() => navigateWithAuth('/post')}
-        className="hidden md:flex fixed bottom-8 right-8 w-16 h-16 items-center justify-center rounded-full bg-[var(--cuerate-blue)] text-white shadow-lg blue-glow hover:scale-110 hover:shadow-[0_0_32px_var(--cuerate-blue-glow)] transition-all duration-300 z-50"
-      >
-        <Plus className="w-8 h-8" />
-      </button>
+      {!isPromptDetailRoute && (
+        <button
+          onClick={() => navigateWithAuth('/post')}
+          className="hidden md:flex fixed bottom-8 right-8 w-16 h-16 items-center justify-center rounded-full bg-[var(--cuerate-blue)] text-white shadow-lg blue-glow hover:scale-110 hover:shadow-[0_0_32px_var(--cuerate-blue-glow)] transition-all duration-300 z-50"
+        >
+          <Plus className="w-8 h-8" />
+        </button>
+      )}
 
       {/* Main content - with responsive padding */}
       <main className="flex-1 relative z-10 pb-20 md:pb-0 md:ml-64 w-full">
