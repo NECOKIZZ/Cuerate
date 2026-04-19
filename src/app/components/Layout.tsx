@@ -166,8 +166,8 @@ export function Layout() {
         className="mobile-nav fixed bottom-4 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)]/96 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.28)] md:hidden"
         style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
       >
-        <div className="px-2">
-          <div className="grid h-16 grid-cols-5 items-center">
+        <div className="w-full px-2">
+          <div className="grid h-16 w-full grid-cols-5 items-center">
             {navItems.map(({ path, icon: Icon, label }) => {
               const active = isActive(path);
               return (
