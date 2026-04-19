@@ -105,6 +105,7 @@ export function Explore() {
         prompt.promptText,
         prompt.authorHandle,
         prompt.model,
+        prompt.moodLabel,
         ...prompt.styleTags,
       ]
         .join(' ')

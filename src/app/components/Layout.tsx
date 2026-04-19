@@ -1,5 +1,5 @@
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import { Home, Compass, PlusCircle, User, Bell, Settings, Plus } from 'lucide-react';
+import { Home, Compass, User, Bell, Settings, Plus } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { truncateText } from '../../lib/text';
 import { notificationsApi } from '../../lib/backend';
@@ -21,8 +21,9 @@ export function Layout() {
   const navItems = [
     { path: '/', icon: Home, label: 'Feed' },
     { path: '/explore', icon: Compass, label: 'Explore' },
-    { path: '/post', icon: PlusCircle, label: 'Post' },
+    { path: '/notifications', icon: Bell, label: 'Alerts' },
     { path: '/profile', icon: User, label: 'Profile' },
+    { path: '/settings', icon: Settings, label: 'Settings' },
   ].filter((entry) => !(isPromptDetailRoute && entry.path === '/post'));
 
   const desktopNavItems = [
@@ -39,7 +40,7 @@ export function Layout() {
   };
 
   const navigateWithAuth = (path: string) => {
-    const requiresAuth = ['/post', '/profile'];
+    const requiresAuth = ['/post', '/profile', '/notifications', '/settings'];
     if (!user && requiresAuth.includes(path)) {
       navigate('/auth');
       return;
@@ -145,13 +146,13 @@ export function Layout() {
         </div>
       </aside>
 
-      {/* Desktop Floating Action Button */}
+      {/* Floating Action Button */}
       {!isPromptDetailRoute && (
         <button
           onClick={() => navigateWithAuth('/post')}
-          className="hidden md:flex fixed bottom-8 right-8 w-16 h-16 items-center justify-center rounded-full bg-[var(--cuerate-blue)] text-white shadow-lg blue-glow hover:scale-110 hover:shadow-[0_0_32px_var(--cuerate-blue-glow)] transition-all duration-300 z-50"
+          className="fixed bottom-24 md:bottom-8 right-5 md:right-8 w-14 h-14 md:w-16 md:h-16 flex items-center justify-center rounded-full bg-[var(--cuerate-blue)] text-white shadow-lg blue-glow hover:scale-110 hover:shadow-[0_0_32px_var(--cuerate-blue-glow)] transition-all duration-300 z-50"
         >
-          <Plus className="w-8 h-8" />
+          <Plus className="w-7 h-7 md:w-8 md:h-8" />
         </button>
       )}
 
@@ -161,20 +162,25 @@ export function Layout() {
       </main>
 
       {/* Mobile Bottom Navigation */}
-      <nav className="mobile-nav fixed bottom-0 left-0 right-0 z-50 glass-nav border-t border-[var(--cuerate-text-3)]" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="cuerate-container">
-          <div className="flex items-center justify-around h-20 px-2">
+      <nav
+        className="mobile-nav fixed bottom-4 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)]/96 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.28)] md:hidden"
+        style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className="px-3">
+          <div className="flex items-center justify-between h-16 px-1">
             {navItems.map(({ path, icon: Icon, label }) => {
               const active = isActive(path);
               return (
                 <button
                   key={path}
                   onClick={() => navigateWithAuth(path)}
-                  className={`flex flex-col items-center justify-center gap-1 transition-all min-w-[64px] min-h-[48px] px-2 py-1 rounded-[var(--cuerate-r-md)] ${active ? 'text-[var(--cuerate-indigo)]' : 'text-[var(--cuerate-text-2)]'}`}
+                  className={`flex flex-col items-center justify-center gap-1 transition-all min-w-[64px] min-h-[48px] px-2 py-1 rounded-[var(--cuerate-r-md)] ${
+                    active
+                      ? 'text-[var(--cuerate-indigo)] bg-[var(--cuerate-indigo)]/10'
+                      : 'text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                  }`}
                 >
-                  <Icon
-                    className={`${path === '/post' ? 'w-8 h-8' : 'w-6 h-6'} ${active ? 'indigo-glow' : ''}`}
-                  />
+                  <Icon className={`w-5 h-5 ${active ? 'indigo-glow' : ''}`} />
                   <span
                     className={`font-accent text-[10px] ${active ? 'font-medium' : 'font-normal'}`}
                   >
