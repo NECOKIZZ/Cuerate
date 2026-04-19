@@ -112,9 +112,6 @@ export function PromptDetail() {
             </span>
           )}
         </div>
-        <span className="rounded-[var(--cuerate-r-pill)] border border-white/20 bg-black/45 px-2.5 py-1 font-accent text-[10px] text-white backdrop-blur-sm md:text-xs">
-          {prompt.moodLabel}
-        </span>
         <button
           onClick={() => setIsPromptVisible((current) => !current)}
           className="inline-flex items-center gap-1.5 rounded-[var(--cuerate-r-pill)] border border-white/20 bg-black/55 px-2.5 py-1.5 font-accent text-[10px] text-white backdrop-blur-md transition-colors hover:bg-black/70 md:px-3 md:text-xs"
@@ -131,11 +128,15 @@ export function PromptDetail() {
               <span className="font-accent text-[10px] uppercase tracking-[0.14em] text-[var(--cuerate-text-2)] md:text-xs">
                 {formatDistanceToNow(prompt.createdAt, { addSuffix: true })}
               </span>
-              {prompt.isForked && prompt.forkedFromAuthorHandle && (
-                <span className="inline-flex items-center gap-1 text-[10px] text-[var(--cuerate-indigo)] md:text-xs">
+              {prompt.isForked && prompt.forkedFromAuthorHandle && prompt.forkedFromId && (
+                <button
+                  onClick={() => navigate(`/prompt/${prompt.forkedFromId}`)}
+                  className="inline-flex items-center gap-1 text-[10px] text-[var(--cuerate-indigo)] hover:underline md:text-xs"
+                  title={`Open parent prompt from @${prompt.forkedFromAuthorHandle}`}
+                >
                   <GitFork className="h-3 w-3" />
                   Forked from @{displayForkedFromHandle}
-                </span>
+                </button>
               )}
             </div>
             <div className="max-h-24 overflow-y-auto md:max-h-32">

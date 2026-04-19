@@ -10,6 +10,7 @@ import { Layout } from './components/Layout';
 import { Auth } from './screens/Auth';
 import { WorkflowDetail } from './screens/WorkflowDetail';
 import { PromptDetail } from './screens/PromptDetail';
+import { Settings } from './screens/Settings';
 
 export const router = createBrowserRouter([
   {
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: 'profile', Component: MyProfile },
       { path: 'user/:handle', Component: UserProfile },
       { path: 'notifications', Component: Notifications },
+      { path: 'settings', Component: Settings },
       { path: 'workflow/:workflowId', Component: WorkflowDetail },
       { path: 'prompt/:promptId', Component: PromptDetail },
     ],

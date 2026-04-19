@@ -1,11 +1,11 @@
 import { ChangeEvent, useEffect, useState } from 'react';
-import { Camera, Globe, Instagram, Loader2, LogOut, Trash2, Twitter, X, Youtube } from 'lucide-react';
+import { Bookmark, Camera, Globe, Instagram, Loader2, LogOut, Trash2, Twitter, X, Youtube } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { authApi, followsApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
 import { useBackendQuery } from '../../lib/useBackendQuery';
 import { useAuth } from '../../lib/auth-context';
 import { truncateText } from '../../lib/text';
-import { Prompt, User, Workflow } from '../../lib/types';
+import { Prompt, Workflow } from '../../lib/types';
 
 function buildExternalUrl(rawUrl?: string) {
   const value = rawUrl?.trim();
@@ -20,6 +20,18 @@ function buildExternalUrl(rawUrl?: string) {
   return `https://${value}`;
 }
 
+function getPromptAspectRatio(prompt: Prompt) {
+  if (prompt.mediaWidth && prompt.mediaHeight) {
+    return `${prompt.mediaWidth} / ${prompt.mediaHeight}`;
+  }
+
+  return prompt.aspectRatio === 'portrait' ? '9 / 16' : '16 / 9';
+}
+
+function getWorkflowAspectRatio(workflow: Workflow) {
+  return workflow.mediaAspectRatio === 'portrait' ? '9 / 12' : '16 / 10';
+}
+
 export function MyProfile() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'prompts' | 'forks' | 'saves' | 'workflows'>('prompts');
@@ -29,7 +41,6 @@ export function MyProfile() {
   const [deletingWorkflowId, setDeletingWorkflowId] = useState<string | null>(null);
   const [workflowPendingDelete, setWorkflowPendingDelete] = useState<Workflow | null>(null);
   const [removedWorkflowIds, setRemovedWorkflowIds] = useState<Set<string>>(new Set());
-  const [profile, setProfile] = useState<User | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -41,7 +52,9 @@ export function MyProfile() {
   const [draftInstagram, setDraftInstagram] = useState('');
   const [draftYoutube, setDraftYoutube] = useState('');
   const [draftWebsite, setDraftWebsite] = useState('');
+  const [savedPromptSet, setSavedPromptSet] = useState<Set<string>>(new Set());
   const { user: authUser, isLoading: authIsLoading, signOut } = useAuth();
+  const profile = authUser;
   const { data: prompts } = useBackendQuery(() => promptsApi.getFeedPrompts(), [], []);
   const { data: workflows } = useBackendQuery(() => workflowsApi.getFeedWorkflows(), [], []);
   const { data: savedPromptIds } = useBackendQuery(
@@ -61,16 +74,16 @@ export function MyProfile() {
   );
 
   useEffect(() => {
-    setProfile(authUser);
-  }, [authUser]);
-
-  useEffect(() => {
     return () => {
       if (avatarPreviewUrl) {
         URL.revokeObjectURL(avatarPreviewUrl);
       }
     };
   }, [avatarPreviewUrl]);
+
+  useEffect(() => {
+    setSavedPromptSet(new Set(savedPromptIds));
+  }, [savedPromptIds]);
 
   if (authIsLoading && !profile) {
     return (
@@ -105,9 +118,10 @@ export function MyProfile() {
   }
 
   const visiblePrompts = prompts.filter((prompt) => !removedPromptIds.has(prompt.id));
-  const userPrompts = visiblePrompts.filter((prompt) => prompt.authorUid === profile.uid);
-  const userForks = userPrompts.filter((prompt) => prompt.isForked);
-  const savedPrompts = visiblePrompts.filter((prompt) => savedPromptIds.includes(prompt.id));
+  const userAuthoredPrompts = visiblePrompts.filter((prompt) => prompt.authorUid === profile.uid);
+  const userPrompts = userAuthoredPrompts.filter((prompt) => !prompt.isForked);
+  const userForks = userAuthoredPrompts.filter((prompt) => prompt.isForked);
+  const savedPrompts = visiblePrompts.filter((prompt) => savedPromptSet.has(prompt.id));
   const visibleWorkflows = workflows.filter((workflow) => !removedWorkflowIds.has(workflow.id));
   const userWorkflows = visibleWorkflows.filter((workflow) => workflow.authorUid === profile.uid);
   const displayHandle = truncateText(profile.handle, 20);
@@ -187,7 +201,6 @@ export function MyProfile() {
         },
       });
 
-      setProfile(updatedProfile);
       setIsEditModalOpen(false);
 
       if (avatarPreviewUrl) {
@@ -242,6 +255,45 @@ export function MyProfile() {
     } finally {
       setDeletingWorkflowId(null);
     }
+  };
+
+  const handleToggleSavedPrompt = (promptId: string) => {
+    if (!profile) {
+      return;
+    }
+
+    const wasSaved = savedPromptSet.has(promptId);
+    setSavedPromptSet((prev) => {
+      const next = new Set(prev);
+      if (wasSaved) {
+        next.delete(promptId);
+      } else {
+        next.add(promptId);
+      }
+      return next;
+    });
+
+    void promptsApi.toggleSave(promptId, profile.uid).then((result) => {
+      setSavedPromptSet((prev) => {
+        const next = new Set(prev);
+        if (result.saved) {
+          next.add(promptId);
+        } else {
+          next.delete(promptId);
+        }
+        return next;
+      });
+    }).catch(() => {
+      setSavedPromptSet((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) {
+          next.add(promptId);
+        } else {
+          next.delete(promptId);
+        }
+        return next;
+      });
+    });
   };
 
   return (
@@ -387,7 +439,8 @@ export function MyProfile() {
                 userWorkflows.map((workflow: Workflow) => (
                   <div
                     key={workflow.id}
-                    className="relative aspect-video rounded-[var(--cuerate-r-lg)] overflow-hidden cursor-pointer hover:opacity-85 transition-opacity"
+                    className="relative rounded-[var(--cuerate-r-lg)] overflow-hidden cursor-pointer hover:opacity-85 transition-opacity"
+                    style={{ aspectRatio: getWorkflowAspectRatio(workflow) }}
                     role="button"
                     tabIndex={0}
                     onClick={() => navigate(`/workflow/${workflow.id}`)}
@@ -417,9 +470,6 @@ export function MyProfile() {
                       <Trash2 className="h-4 w-4 text-white" />
                     </button>
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
-                    <div className="absolute top-2 left-2 px-2 py-1 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-[10px] text-[var(--cuerate-text-1)]">
-                      {workflow.tool}
-                    </div>
                     <div className="absolute bottom-2 left-2 right-2">
                       <p className="font-primary text-sm text-white truncate">{workflow.title}</p>
                     </div>
@@ -439,7 +489,8 @@ export function MyProfile() {
                 promptTabContent.map((prompt) => (
                   <div
                     key={prompt.id}
-                    className="relative aspect-square rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+                    className="relative rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+                    style={{ aspectRatio: getPromptAspectRatio(prompt) }}
                     role="button"
                     tabIndex={0}
                     onClick={() => navigate(`/prompt/${prompt.id}`)}
@@ -455,7 +506,7 @@ export function MyProfile() {
                     <img
                       src={prompt.thumbnailUrl}
                       alt={`Prompt by ${prompt.authorHandle}`}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full bg-black/20 object-contain"
                     />
                     {(activeTab === 'prompts' || activeTab === 'forks') && prompt.authorUid === profile.uid && (
                       <button
@@ -468,6 +519,19 @@ export function MyProfile() {
                         aria-label="Delete post"
                       >
                         <Trash2 className="h-4 w-4 text-white" />
+                      </button>
+                    )}
+                    {activeTab === 'saves' && (
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleToggleSavedPrompt(prompt.id);
+                        }}
+                        className="absolute top-1 left-1 p-2 rounded-full bg-black/60 hover:bg-[var(--cuerate-indigo)]/70 transition-colors"
+                        aria-label="Unsave prompt"
+                        title="Remove from saved"
+                      >
+                        <Bookmark className="h-4 w-4 text-[var(--cuerate-indigo)] fill-[var(--cuerate-indigo)]" />
                       </button>
                     )}
                   </div>

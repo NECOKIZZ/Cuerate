@@ -20,10 +20,13 @@ type PostMode = 'prompt' | 'workflow';
 interface WorkflowDraftStep {
   id: string;
   label: string;
+  model: string;
   generationType: WorkflowGenerationType;
+  ingredientOutputType: PromptContentType;
   promptText: string;
   note: string;
   inputImageFile: File | null;
+  ingredientFiles: File[];
   startFrameFile: File | null;
   endFrameFile: File | null;
   resultMediaFile: File | null;
@@ -34,24 +37,45 @@ const generationTypeOptions: Array<{ value: WorkflowGenerationType; label: strin
   { value: 'image_to_video', label: 'Image to video' },
   { value: 'frames_to_video', label: 'Two frames to video' },
   { value: 'prompt_to_image', label: 'Prompt to image' },
+  { value: 'ingredients', label: 'Ingredients' },
 ];
+const IMAGE_ONLY_MODEL = 'NanoBanana';
+const MAX_INGREDIENTS = 5;
 
-function createWorkflowStep(index: number): WorkflowDraftStep {
+function createWorkflowStep(index: number, model = ''): WorkflowDraftStep {
   return {
     id: `step-${index + 1}`,
     label: `Step ${index + 1}`,
+    model,
     generationType: 'prompt_to_video',
+    ingredientOutputType: 'video',
     promptText: '',
     note: '',
     inputImageFile: null,
+    ingredientFiles: [],
     startFrameFile: null,
     endFrameFile: null,
     resultMediaFile: null,
   };
 }
 
-function getExpectedResultType(type: WorkflowGenerationType): PromptContentType {
-  return type === 'prompt_to_image' ? 'image' : 'video';
+function getExpectedResultType(step: Pick<WorkflowDraftStep, 'generationType' | 'ingredientOutputType'>): PromptContentType {
+  if (step.generationType === 'prompt_to_image') {
+    return 'image';
+  }
+
+  if (step.generationType === 'ingredients') {
+    return step.ingredientOutputType;
+  }
+
+  return 'video';
+}
+
+function ensureNanoBananaOption(models: string[]) {
+  if (models.includes(IMAGE_ONLY_MODEL)) {
+    return models;
+  }
+  return [IMAGE_ONLY_MODEL, ...models];
 }
 
 export function Post() {
@@ -73,7 +97,6 @@ export function Post() {
 
   const [workflowTitle, setWorkflowTitle] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
-  const [workflowTool, setWorkflowTool] = useState('');
   const [workflowTags, setWorkflowTags] = useState<string[]>([]);
   const [workflowCoverFile, setWorkflowCoverFile] = useState<File | null>(null);
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowDraftStep[]>([
@@ -84,6 +107,7 @@ export function Post() {
   const { data: availableStyleTags } = useBackendQuery(() => metaApi.getAvailableStyleTags(), [], []);
   const { data: availableMoodLabels } = useBackendQuery(() => metaApi.getAvailableMoodLabels(), [], []);
   const { data: difficultyLevels } = useBackendQuery(() => metaApi.getDifficultyLevels(), [], []);
+  const allModelOptions = ensureNanoBananaOption([...availableModels]);
 
   const handleAutoFill = async () => {
     setIsAutoFilling(true);
@@ -92,7 +116,7 @@ export function Post() {
       setCameraNotes('anamorphic lens, slow dolly forward, shallow depth of field');
       setSelectedMood('Cinematic');
       setSelectedDifficulty('Intermediate');
-      setSelectedModel('Sora');
+      setSelectedModel(contentType === 'image' ? IMAGE_ONLY_MODEL : 'Sora');
       setIsAutoFilling(false);
     }, 1200);
   };
@@ -116,11 +140,25 @@ export function Post() {
   };
 
   const handleWorkflowGenerationType = (stepId: string, value: WorkflowGenerationType) => {
+    const expectedType = getExpectedResultType({
+      generationType: value,
+      ingredientOutputType: value === 'ingredients' ? 'video' : 'video',
+    });
     updateWorkflowStep(stepId, {
       generationType: value,
+      ingredientOutputType: value === 'ingredients' ? 'video' : 'video',
+      model: expectedType === 'image' && value !== 'ingredients' ? IMAGE_ONLY_MODEL : '',
       inputImageFile: null,
+      ingredientFiles: [],
       startFrameFile: null,
       endFrameFile: null,
+      resultMediaFile: null,
+    });
+  };
+
+  const handleIngredientOutputType = (stepId: string, value: PromptContentType) => {
+    updateWorkflowStep(stepId, {
+      ingredientOutputType: value,
       resultMediaFile: null,
     });
   };
@@ -130,7 +168,15 @@ export function Post() {
       if (prev.length >= 8) {
         return prev;
       }
-      return [...prev, createWorkflowStep(prev.length)];
+      const previousStep = prev[prev.length - 1];
+      const previousStepExpectedType = previousStep
+        ? getExpectedResultType(previousStep)
+        : 'video';
+      const previousStepModel =
+        previousStepExpectedType === 'video' && previousStep?.model?.trim() && previousStep.model !== IMAGE_ONLY_MODEL
+          ? previousStep.model
+          : '';
+      return [...prev, createWorkflowStep(prev.length, previousStepModel)];
     });
   };
 
@@ -139,7 +185,13 @@ export function Post() {
       if (prev.length <= 1) {
         return prev;
       }
-      return prev.filter((entry) => entry.id !== stepId);
+      return prev
+        .filter((entry) => entry.id !== stepId)
+        .map((entry, index) => ({
+          ...entry,
+          id: `step-${index + 1}`,
+          label: entry.label.trim() || `Step ${index + 1}`,
+        }));
     });
   };
 
@@ -149,6 +201,12 @@ export function Post() {
     }
     if (!mediaFile) {
       throw new Error('Please upload an image or video before publishing.');
+    }
+    if (contentType === 'image' && selectedModel !== IMAGE_ONLY_MODEL) {
+      throw new Error('Image prompts must use NanoBanana.');
+    }
+    if (contentType === 'video' && selectedModel === IMAGE_ONLY_MODEL) {
+      throw new Error('NanoBanana is only available for image generation.');
     }
 
     let videoUrl = '';
@@ -205,9 +263,6 @@ export function Post() {
     if (!workflowTitle.trim()) {
       throw new Error('Workflow title is required.');
     }
-    if (!workflowTool.trim()) {
-      throw new Error('Please select an AI tool.');
-    }
     if (!workflowCoverFile) {
       throw new Error('Please upload a workflow cover video.');
     }
@@ -227,11 +282,20 @@ export function Post() {
     for (let i = 0; i < workflowSteps.length; i += 1) {
       const step = workflowSteps[i];
       const stepIndex = i + 1;
+      if (!step.model.trim()) {
+        throw new Error(`Step ${stepIndex}: select a model.`);
+      }
       if (!step.promptText.trim()) {
         throw new Error(`Step ${stepIndex}: prompt text is required.`);
       }
 
-      const expectedType = getExpectedResultType(step.generationType);
+      const expectedType = getExpectedResultType(step);
+      if (step.generationType !== 'ingredients' && expectedType === 'image' && step.model.trim() !== IMAGE_ONLY_MODEL) {
+        throw new Error(`Step ${stepIndex}: image output steps must use NanoBanana.`);
+      }
+      if (step.generationType !== 'ingredients' && expectedType === 'video' && step.model.trim() === IMAGE_ONLY_MODEL) {
+        throw new Error(`Step ${stepIndex}: NanoBanana can only be used for image output steps.`);
+      }
       if (!step.resultMediaFile) {
         throw new Error(`Step ${stepIndex}: result file is required.`);
       }
@@ -243,6 +307,7 @@ export function Post() {
       }
 
       let inputImageUrl: string | undefined;
+      let ingredientsImageUrls: string[] | undefined;
       let startFrameUrl: string | undefined;
       let endFrameUrl: string | undefined;
 
@@ -264,6 +329,25 @@ export function Post() {
         endFrameUrl = (await uploadsApi.uploadPromptMedia(step.endFrameFile, activeUser.uid)).downloadUrl;
       }
 
+      if (step.generationType === 'ingredients') {
+        if (step.ingredientFiles.length === 0) {
+          throw new Error(`Step ${stepIndex}: add at least 1 ingredient image.`);
+        }
+        if (step.ingredientFiles.length > MAX_INGREDIENTS) {
+          throw new Error(`Step ${stepIndex}: you can add up to ${MAX_INGREDIENTS} ingredient images.`);
+        }
+        for (const ingredient of step.ingredientFiles) {
+          if (!ingredient.type.startsWith('image/')) {
+            throw new Error(`Step ${stepIndex}: ingredients must be image files.`);
+          }
+        }
+        ingredientsImageUrls = [];
+        for (const ingredient of step.ingredientFiles) {
+          const ingredientUpload = await uploadsApi.uploadPromptMedia(ingredient, activeUser.uid);
+          ingredientsImageUrls.push(ingredientUpload.downloadUrl);
+        }
+      }
+
       const resultUpload = await uploadsApi.uploadPromptMedia(step.resultMediaFile, activeUser.uid);
       let resultThumbnailUrl = resultUpload.downloadUrl;
       if (expectedType === 'video') {
@@ -277,10 +361,12 @@ export function Post() {
 
       steps.push({
         label: step.label.trim() || `Step ${stepIndex}`,
+        model: step.model.trim(),
         generationType: step.generationType,
         promptText: step.promptText.trim(),
         note: step.note.trim() || undefined,
         inputImageUrl,
+        ingredientsImageUrls,
         startFrameUrl,
         endFrameUrl,
         resultMediaUrl: resultUpload.downloadUrl,
@@ -289,10 +375,13 @@ export function Post() {
       });
     }
 
+    const selectedModels = Array.from(new Set(steps.map((step) => step.model)));
+    const workflowToolLabel = selectedModels.length === 1 ? selectedModels[0] : 'Mixed';
+
     const created = await workflowsApi.createWorkflow({
       authorUid: activeUser.uid,
       title: workflowTitle.trim(),
-      tool: workflowTool.trim(),
+      tool: workflowToolLabel,
       description: workflowDescription.trim(),
       coverVideoUrl: coverVideoUpload.downloadUrl,
       coverThumbnailUrl: coverThumbnailUpload.downloadUrl,
@@ -325,8 +414,12 @@ export function Post() {
     }
   };
 
-  const workflowCanPublish = workflowTitle.trim() && workflowTool.trim() && workflowCoverFile;
+  const workflowCanPublish = workflowTitle.trim() && workflowCoverFile;
   const promptCanPublish = promptText.trim() && selectedModel && mediaFile;
+  const promptModelOptions =
+    contentType === 'image'
+      ? [IMAGE_ONLY_MODEL]
+      : availableModels.filter((model) => model !== IMAGE_ONLY_MODEL);
 
   if (authIsLoading && !activeUser) {
     return (
@@ -411,6 +504,7 @@ export function Post() {
                     onClick={() => {
                       setContentType(entry);
                       setMediaFile(null);
+                      setSelectedModel(entry === 'image' ? IMAGE_ONLY_MODEL : '');
                       setPublishError(null);
                     }}
                     className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
@@ -477,7 +571,7 @@ export function Post() {
             <div>
               <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Model</label>
               <div className="flex flex-wrap gap-2">
-                {availableModels.map((model) => (
+                {promptModelOptions.map((model) => (
                   <button
                     key={model}
                     onClick={() => setSelectedModel(model)}
@@ -617,27 +711,20 @@ export function Post() {
                 ))}
               </div>
 
-              <label className="font-accent text-sm text-[var(--cuerate-text-1)] block">Model / Tool</label>
-              <div className="flex flex-wrap gap-2">
-                {availableModels.map((model) => (
-                  <button
-                    key={`workflow-tool-${model}`}
-                    onClick={() => setWorkflowTool(model)}
-                    className={`rounded-[var(--cuerate-r-pill)] px-4 py-2 font-accent text-sm transition-all ${
-                      workflowTool === model
-                        ? 'bg-[#f5a623] text-[#1b1205] shadow-[0_0_24px_rgba(245,166,35,0.28)]'
-                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                    }`}
-                  >
-                    {model}
-                  </button>
-                ))}
-              </div>
+              <p className="font-accent text-xs text-[var(--cuerate-text-2)]">
+                Choose model per step below.
+              </p>
             </div>
 
             <div className="space-y-4">
               {workflowSteps.map((step, index) => {
-                const expectedType = getExpectedResultType(step.generationType);
+                const expectedType = getExpectedResultType(step);
+                const stepModelOptions =
+                  step.generationType === 'ingredients'
+                    ? allModelOptions
+                    : expectedType === 'image'
+                      ? [IMAGE_ONLY_MODEL]
+                      : availableModels.filter((model) => model !== IMAGE_ONLY_MODEL);
                 return (
                   <div
                     key={step.id}
@@ -667,6 +754,25 @@ export function Post() {
                       className="w-full rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-black/15 px-3 py-2 font-accent text-sm text-[var(--cuerate-text-1)]"
                     />
 
+                    <div>
+                      <label className="mb-2 block font-accent text-xs text-[var(--cuerate-text-2)]">Model</label>
+                      <div className="flex flex-wrap gap-2">
+                        {stepModelOptions.map((model) => (
+                          <button
+                            key={`${step.id}-model-${model}`}
+                            onClick={() => updateWorkflowStep(step.id, { model })}
+                            className={`rounded-[var(--cuerate-r-pill)] px-3 py-1.5 font-accent text-xs transition-all ${
+                              step.model === model
+                                ? 'bg-[#f5a623] text-[#1b1205]'
+                                : 'glass-surface text-[var(--cuerate-text-2)]'
+                            }`}
+                          >
+                            {model}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <div className="flex flex-wrap gap-2">
                       {generationTypeOptions.map((option) => (
                         <button
@@ -682,6 +788,27 @@ export function Post() {
                         </button>
                       ))}
                     </div>
+
+                    {step.generationType === 'ingredients' && (
+                      <div>
+                        <label className="mb-2 block font-accent text-xs text-[var(--cuerate-text-2)]">Ingredients Output</label>
+                        <div className="flex flex-wrap gap-2">
+                          {(['video', 'image'] as const).map((option) => (
+                            <button
+                              key={`${step.id}-ingredient-output-${option}`}
+                              onClick={() => handleIngredientOutputType(step.id, option)}
+                              className={`rounded-[var(--cuerate-r-pill)] px-3 py-1.5 font-accent text-xs transition-all ${
+                                step.ingredientOutputType === option
+                                  ? 'bg-[#f5a623] text-[#1b1205]'
+                                  : 'glass-surface text-[var(--cuerate-text-2)]'
+                              }`}
+                            >
+                              {option === 'video' ? 'Video Output' : 'Image Output'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     <textarea
                       value={step.promptText}
@@ -731,6 +858,55 @@ export function Post() {
                             onChange={(event) => updateWorkflowStep(step.id, { endFrameFile: event.target.files?.[0] ?? null })}
                           />
                         </label>
+                      </div>
+                    )}
+
+                    {step.generationType === 'ingredients' && (
+                      <div className="space-y-2">
+                        <label className="mb-1 block font-accent text-xs text-[var(--cuerate-text-2)]">
+                          Ingredients (up to {MAX_INGREDIENTS} images)
+                        </label>
+                        <label className="flex cursor-pointer items-center justify-between rounded-[var(--cuerate-r-md)] border border-[#f5a623]/20 bg-black/20 px-3 py-2.5 hover:border-[#f5a623]/45 transition-colors">
+                          <span className="font-accent text-sm text-[var(--cuerate-text-2)]">
+                            {step.ingredientFiles.length > 0
+                              ? `${step.ingredientFiles.length} ingredient image${step.ingredientFiles.length > 1 ? 's' : ''} selected`
+                              : 'Upload ingredient images'}
+                          </span>
+                          <Upload className="h-4 w-4 text-[#ffd27c]" />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(event) => {
+                              const chosen = Array.from(event.target.files ?? []);
+                              const nextFiles = [...step.ingredientFiles, ...chosen].slice(0, MAX_INGREDIENTS);
+                              updateWorkflowStep(step.id, { ingredientFiles: nextFiles });
+                            }}
+                          />
+                        </label>
+                        {step.ingredientFiles.length > 0 && (
+                          <div className="space-y-1">
+                            {step.ingredientFiles.map((file, ingredientIndex) => (
+                              <div
+                                key={`${step.id}-ingredient-${ingredientIndex}-${file.name}`}
+                                className="flex items-center justify-between rounded-[var(--cuerate-r-md)] border border-[var(--cuerate-text-3)] bg-black/15 px-3 py-2"
+                              >
+                                <span className="truncate font-accent text-xs text-[var(--cuerate-text-2)]">{file.name}</span>
+                                <button
+                                  onClick={() =>
+                                    updateWorkflowStep(step.id, {
+                                      ingredientFiles: step.ingredientFiles.filter((_, fileIndex) => fileIndex !== ingredientIndex),
+                                    })
+                                  }
+                                  className="rounded-[var(--cuerate-r-pill)] border border-red-400/25 px-2 py-0.5 font-accent text-[10px] text-red-300 hover:bg-red-500/10"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
 

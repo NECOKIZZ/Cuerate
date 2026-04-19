@@ -1,21 +1,32 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Check } from 'lucide-react';
-import { metaApi, usersApi } from '../../lib/backend';
+import { followsApi, metaApi, usersApi } from '../../lib/backend';
 import { useBackendQuery } from '../../lib/useBackendQuery';
+import { useAuth } from '../../lib/auth-context';
 import { truncateText } from '../../lib/text';
 
 type Step = 1 | 2 | 3;
 
 export function Onboarding() {
   const navigate = useNavigate();
+  const { user: activeUser } = useAuth();
   const [step, setStep] = useState<Step>(1);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [followedCreators, setFollowedCreators] = useState<string[]>([]);
   const { data: availableModels } = useBackendQuery(() => metaApi.getAvailableModels(), [], []);
   const { data: users } = useBackendQuery(() => usersApi.getAllUsers(), [], []);
+  const { data: followingUserIds } = useBackendQuery(
+    () => (activeUser ? followsApi.getFollowingUserIds(activeUser.uid) : Promise.resolve([])),
+    [],
+    [activeUser?.uid],
+  );
 
-  const suggestedCreators = users.filter((user) => user.uid !== 'currentUser');
+  useEffect(() => {
+    setFollowedCreators(followingUserIds);
+  }, [followingUserIds]);
+
+  const suggestedCreators = users.filter((user) => user.uid !== activeUser?.uid);
 
   const toggleModel = (model: string) => {
     setSelectedModels((previous) =>
@@ -24,13 +35,52 @@ export function Onboarding() {
   };
 
   const toggleFollow = (uid: string) => {
+    if (!activeUser) {
+      navigate('/auth');
+      return;
+    }
+
+    const wasFollowing = followedCreators.includes(uid);
     setFollowedCreators((previous) =>
-      previous.includes(uid) ? previous.filter((entry) => entry !== uid) : [...previous, uid],
+      wasFollowing ? previous.filter((entry) => entry !== uid) : [...previous, uid],
     );
+
+    void followsApi.toggleFollow(activeUser.uid, uid).then((result) => {
+      setFollowedCreators((previous) => {
+        const next = new Set(previous);
+        if (result.following) {
+          next.add(uid);
+        } else {
+          next.delete(uid);
+        }
+        return Array.from(next);
+      });
+    }).catch(() => {
+      setFollowedCreators((previous) => {
+        const next = new Set(previous);
+        if (wasFollowing) {
+          next.add(uid);
+        } else {
+          next.delete(uid);
+        }
+        return Array.from(next);
+      });
+    });
   };
 
   const followAll = () => {
-    setFollowedCreators(suggestedCreators.map((creator) => creator.uid));
+    if (!activeUser) {
+      navigate('/auth');
+      return;
+    }
+
+    const creatorIds = suggestedCreators.map((creator) => creator.uid);
+    setFollowedCreators(creatorIds);
+    for (const creatorId of creatorIds) {
+      if (!followingUserIds.includes(creatorId)) {
+        void followsApi.toggleFollow(activeUser.uid, creatorId).catch(() => undefined);
+      }
+    }
   };
 
   const handleContinue = () => {

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { Loader2, MailCheck } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 
@@ -225,10 +225,6 @@ export function Auth() {
               'Continue with Google'
             )}
           </button>
-
-          <p className="mt-6 text-center font-accent text-sm text-[var(--cuerate-text-2)]">
-            Back to <Link to="/" className="text-[var(--cuerate-blue)] hover:underline">feed</Link>
-          </p>
         </div>
       </div>
     </div>

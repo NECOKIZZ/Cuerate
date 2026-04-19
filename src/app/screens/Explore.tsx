@@ -194,6 +194,7 @@ export function Explore() {
                 trendingTags.map(({ tag, count }) => (
                   <button
                     key={tag}
+                    onClick={() => setSearchQuery(tag)}
                     className="flex flex-col items-center gap-1 px-6 py-3 rounded-[var(--cuerate-r-pill)] glass-surface hover:bg-[var(--cuerate-indigo)]/10 transition-colors whitespace-nowrap"
                   >
                     <span className="font-accent font-medium text-sm text-[var(--cuerate-indigo)]">

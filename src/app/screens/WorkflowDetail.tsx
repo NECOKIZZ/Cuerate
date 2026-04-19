@@ -13,13 +13,15 @@ import {
 import { workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
 import { useBackendQuery } from '../../lib/useBackendQuery';
-import { Workflow, WorkflowGenerationType } from '../../lib/types';
+import { WorkflowGenerationType } from '../../lib/types';
+import { getAIModelConfig } from '../../lib/aiModelLogos';
 
 const generationTypeLabels: Record<WorkflowGenerationType, string> = {
   prompt_to_video: 'Prompt to video',
   image_to_video: 'Image to video',
   frames_to_video: 'Two frames to video',
   prompt_to_image: 'Prompt to image',
+  ingredients: 'Ingredients',
 };
 
 const generationTypeAccent: Record<WorkflowGenerationType, string> = {
@@ -27,6 +29,7 @@ const generationTypeAccent: Record<WorkflowGenerationType, string> = {
   image_to_video: 'bg-indigo-500/15 text-indigo-200 border-indigo-400/30',
   frames_to_video: 'bg-emerald-500/15 text-emerald-200 border-emerald-400/30',
   prompt_to_image: 'bg-amber-500/15 text-amber-200 border-amber-400/30',
+  ingredients: 'bg-fuchsia-500/15 text-fuchsia-200 border-fuchsia-400/30',
 };
 
 async function copyText(value: string) {
@@ -66,14 +69,14 @@ export function WorkflowDetail() {
     [activeUser?.uid],
   );
 
-  const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [saved, setSaved] = useState(false);
   const [liked, setLiked] = useState(false);
+  const [likesCount, setLikesCount] = useState<number>(0);
   const [copiedStepId, setCopiedStepId] = useState<string | null>(null);
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    setWorkflow(workflowData);
+    setLikesCount(workflowData?.likes ?? 0);
   }, [workflowData]);
 
   useEffect(() => {
@@ -94,7 +97,7 @@ export function WorkflowDetail() {
     );
   }
 
-  if (!workflow) {
+  if (!workflowData) {
     return (
       <div className="min-h-screen px-4 py-10 md:px-8">
         <div className="mx-auto max-w-2xl rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)] p-8 text-center">
@@ -110,6 +113,7 @@ export function WorkflowDetail() {
     );
   }
 
+  const workflow = workflowData;
   const mediaAspectRatio = workflow.mediaAspectRatio === 'portrait' ? '9 / 16' : '16 / 9';
 
   const handleToggleLike = async () => {
@@ -123,30 +127,17 @@ export function WorkflowDetail() {
     }
 
     const wasLiked = liked;
+    const previousLikes = likesCount;
     setLiked(!wasLiked);
-    setWorkflow((prev) =>
-      prev
-        ? {
-            ...prev,
-            likes: Math.max(0, prev.likes + (wasLiked ? -1 : 1)),
-          }
-        : prev,
-    );
+    setLikesCount(Math.max(0, likesCount + (wasLiked ? -1 : 1)));
 
     try {
       const result = await workflowsApi.toggleLike(workflow.id, activeUser.uid);
       setLiked(result.liked);
-      setWorkflow((prev) => (prev ? { ...prev, likes: result.likes } : prev));
+      setLikesCount(result.likes);
     } catch {
       setLiked(wasLiked);
-      setWorkflow((prev) =>
-        prev
-          ? {
-              ...prev,
-              likes: Math.max(0, prev.likes + (wasLiked ? 1 : -1)),
-            }
-          : prev,
-      );
+      setLikesCount(previousLikes);
     }
   };
 
@@ -162,29 +153,12 @@ export function WorkflowDetail() {
 
     const wasSaved = saved;
     setSaved(!wasSaved);
-    setWorkflow((prev) =>
-      prev
-        ? {
-            ...prev,
-            saves: Math.max(0, prev.saves + (wasSaved ? -1 : 1)),
-          }
-        : prev,
-    );
 
     try {
       const result = await workflowsApi.toggleSave(workflow.id, activeUser.uid);
       setSaved(result.saved);
-      setWorkflow((prev) => (prev ? { ...prev, saves: result.saves } : prev));
     } catch {
       setSaved(wasSaved);
-      setWorkflow((prev) =>
-        prev
-          ? {
-              ...prev,
-              saves: Math.max(0, prev.saves + (wasSaved ? 1 : -1)),
-            }
-          : prev,
-      );
     }
   };
 
@@ -266,16 +240,19 @@ export function WorkflowDetail() {
                 }`}
               >
                 <Heart className={`h-4 w-4 ${liked ? 'fill-red-400' : ''}`} />
-                <span>{workflow.likes}</span>
+                <span>{likesCount}</span>
               </button>
             </div>
           </section>
 
-          {workflow.steps.map((step) => (
-            <section
-              key={step.id}
-              className="relative mb-6 rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] bg-[rgba(15,18,33,0.86)] p-4 backdrop-blur-xl"
-            >
+          {workflow.steps.map((step) => {
+            const stepModel = getAIModelConfig(step.model || workflow.tool);
+
+            return (
+              <section
+                key={step.id}
+                className="relative mb-6 rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] bg-[rgba(15,18,33,0.86)] p-4 backdrop-blur-xl"
+              >
               <div className="absolute left-[-31px] top-10 h-4 w-4 rounded-full border-4 border-[#f5a623]/70 bg-[var(--cuerate-bg)]" />
 
               <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -286,6 +263,19 @@ export function WorkflowDetail() {
                   className={`rounded-full border px-3 py-1 font-accent text-xs font-medium ${generationTypeAccent[step.generationType]}`}
                 >
                   {generationTypeLabels[step.generationType]}
+                </span>
+                <span className="h-6 rounded-[var(--cuerate-r-pill)] border border-white/20 bg-black/35 px-2.5 backdrop-blur-md flex items-center gap-1.5">
+                  {stepModel.logoUrl ? (
+                    <img
+                      src={stepModel.logoUrl}
+                      alt={stepModel.name}
+                      className="h-4 w-auto"
+                    />
+                  ) : (
+                    <span className={`font-accent text-[10px] font-bold ${stepModel.color}`}>
+                      {stepModel.name}
+                    </span>
+                  )}
                 </span>
               </div>
 
@@ -335,6 +325,33 @@ export function WorkflowDetail() {
                     </div>
                   </div>
                 )}
+
+                {step.generationType === 'ingredients' &&
+                  Array.isArray(step.ingredientsImageUrls) &&
+                  step.ingredientsImageUrls.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 font-accent text-xs uppercase tracking-[0.12em] text-[var(--cuerate-text-2)]">
+                        <ImageIcon className="h-3.5 w-3.5" />
+                        <span>Ingredients</span>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+                        {step.ingredientsImageUrls.map((imageUrl, ingredientIndex) => (
+                          <div
+                            key={`${step.id}-ingredient-${ingredientIndex}`}
+                            className="group overflow-hidden rounded-[var(--cuerate-r-lg)] border border-[var(--cuerate-text-3)] bg-black/20 transition-transform duration-300 hover:-translate-y-0.5 hover:shadow-[0_12px_26px_rgba(245,166,35,0.16)]"
+                          >
+                            <div style={{ aspectRatio: mediaAspectRatio }}>
+                              <img
+                                src={imageUrl}
+                                alt={`${step.label} ingredient ${ingredientIndex + 1}`}
+                                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                 {step.promptText && (
                   <div className="rounded-[var(--cuerate-r-lg)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-indigo)]/6 p-4">
@@ -415,8 +432,9 @@ export function WorkflowDetail() {
                   </button>
                 )}
               </div>
-            </section>
-          ))}
+              </section>
+            );
+          })}
 
           <button
             onClick={() => {

@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { Bookmark, ChevronDown, Heart, Play } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Bookmark, Check, ChevronDown, Heart, Play, Share2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useNavigate } from 'react-router';
 import { Workflow } from '../../lib/types';
@@ -22,10 +22,20 @@ export function WorkflowCard({
 }: WorkflowCardProps) {
   const navigate = useNavigate();
   const [isHovering, setIsHovering] = useState(false);
+  const [hasShared, setHasShared] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const shareTimeoutRef = useRef<number | null>(null);
   const displayAuthorHandle = truncateText(workflow.authorHandle, 18);
   const displayTitle = truncateText(workflow.title, 56);
   const coverAspectRatio = workflow.mediaAspectRatio === 'portrait' ? '9 / 12' : '16 / 10';
+
+  useEffect(() => {
+    return () => {
+      if (shareTimeoutRef.current !== null) {
+        window.clearTimeout(shareTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleMouseEnter = () => {
     if (!workflow.coverVideoUrl) {
@@ -48,6 +58,68 @@ export function WorkflowCard({
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
     }
+  };
+
+  const copyShareUrl = async (shareUrl: string) => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      return true;
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = shareUrl;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      try {
+        document.execCommand('copy');
+        return true;
+      } catch {
+        return false;
+      } finally {
+        textArea.remove();
+      }
+    }
+  };
+
+  const handleShare = async () => {
+    const shareUrl = `${window.location.origin}/workflow/${workflow.id}`;
+    const shareData = {
+      title: workflow.title,
+      text: `Check out this workflow by @${workflow.authorHandle}`,
+      url: shareUrl,
+    };
+
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        const copied = await copyShareUrl(shareUrl);
+        if (!copied) {
+          return;
+        }
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
+
+      const copied = await copyShareUrl(shareUrl);
+      if (!copied) {
+        return;
+      }
+    }
+
+    setHasShared(true);
+    if (shareTimeoutRef.current !== null) {
+      window.clearTimeout(shareTimeoutRef.current);
+    }
+    shareTimeoutRef.current = window.setTimeout(() => {
+      setHasShared(false);
+    }, 1800);
   };
 
   return (
@@ -114,12 +186,6 @@ export function WorkflowCard({
           />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
-
-        <div className="absolute left-3 top-3 flex items-center gap-2">
-          <span className="rounded-full border border-white/20 bg-black/35 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-white backdrop-blur-md">
-            {workflow.tool}
-          </span>
-        </div>
         {workflow.coverVideoUrl && (
           <div
             className="absolute inset-0 flex items-center justify-center bg-black/20 transition-colors pointer-events-none"
@@ -147,7 +213,7 @@ export function WorkflowCard({
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <button
           onClick={() => onLike?.(workflow.id)}
           className={`flex min-h-[44px] items-center justify-center gap-2 rounded-[var(--cuerate-r-pill)] px-4 py-3 font-accent text-sm font-medium transition-all ${
@@ -170,6 +236,19 @@ export function WorkflowCard({
         >
           <Bookmark className={`h-4 w-4 ${isSaved ? 'fill-[#f5a623]' : ''}`} />
           <span>Save</span>
+        </button>
+
+        <button
+          onClick={() => void handleShare()}
+          className={`flex min-h-[44px] items-center justify-center gap-2 rounded-[var(--cuerate-r-pill)] px-4 py-3 font-accent text-sm font-medium transition-all ${
+            hasShared
+              ? 'border border-[#4cce8a]/45 bg-[#4cce8a]/14 text-[#9ef5c6]'
+              : 'glass-surface text-[var(--cuerate-text-2)] hover:border-[#4cce8a]/35 hover:text-[#9ef5c6]'
+          }`}
+          aria-label="Share workflow"
+        >
+          {hasShared ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+          <span>{hasShared ? 'Shared' : 'Share'}</span>
         </button>
       </div>
 

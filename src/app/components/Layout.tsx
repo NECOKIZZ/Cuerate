@@ -1,14 +1,20 @@
-import { Outlet, useLocation, useNavigate } from 'react-router';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { Home, Compass, PlusCircle, User, Bell, Settings, Plus } from 'lucide-react';
-import { useState } from 'react';
 import { useAuth } from '../../lib/auth-context';
 import { truncateText } from '../../lib/text';
+import { notificationsApi } from '../../lib/backend';
+import { useBackendQuery } from '../../lib/useBackendQuery';
 
 export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [hasUnreadNotifications] = useState(true);
-  const { user, signOut } = useAuth();
+  const { user, isLoading, signOut } = useAuth();
+  const { data: notifications } = useBackendQuery(
+    () => (user ? notificationsApi.getNotificationsForUser(user.uid) : Promise.resolve([])),
+    [],
+    [user?.uid],
+  );
+  const hasUnreadNotifications = notifications.some((entry) => !entry.read);
   const displayHandle = user ? truncateText(user.handle, 16) : null;
   const isPromptDetailRoute = location.pathname.startsWith('/prompt/');
 
@@ -41,6 +47,20 @@ export function Layout() {
 
     navigate(path);
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full glass-surface rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] p-8 text-center">
+          <span className="font-accent text-sm text-[var(--cuerate-text-2)]">Checking your account...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/auth" replace />;
+  }
 
   return (
     <div className="cuerate-container min-h-screen flex relative">
@@ -106,7 +126,10 @@ export function Layout() {
                 <div className="absolute left-8 top-2 w-2 h-2 rounded-full bg-[var(--cuerate-blue)] blue-glow" />
               )}
             </button>
-            <button className="w-full flex items-center gap-4 px-4 py-3 rounded-[var(--cuerate-r-md)] text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)] hover:bg-[var(--cuerate-surface)] transition-all">
+            <button
+              onClick={() => navigate('/settings')}
+              className="w-full flex items-center gap-4 px-4 py-3 rounded-[var(--cuerate-r-md)] text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)] hover:bg-[var(--cuerate-surface)] transition-all"
+            >
               <Settings className="w-6 h-6" />
               <span className="text-base font-accent">Settings</span>
             </button>

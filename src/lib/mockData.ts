@@ -276,6 +276,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow1-step1',
         stepNumber: 1,
         label: 'Hero pour shot',
+        model: 'Runway',
         generationType: 'prompt_to_video',
         promptText: 'Luxury skincare bottle rotating on wet black acrylic, warm spotlight bloom, droplets glistening, ultra-clean product cinematography, slow motion reveal.',
         note: 'Use this first to establish the premium visual language for the full sequence.',
@@ -287,6 +288,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow1-step2',
         stepNumber: 2,
         label: 'Ingredient texture motion',
+        model: 'Runway',
         generationType: 'image_to_video',
         promptText: 'Animate the serum texture with a slow orbit and glassy highlights while keeping the color palette champagne and ivory.',
         note: 'Feed a clean ingredient still as the source so the motion stays elegant.',
@@ -299,6 +301,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow1-step3',
         stepNumber: 3,
         label: 'Cap open transition',
+        model: 'Sora',
         generationType: 'frames_to_video',
         promptText:
           'Morph from capped bottle frame into uncapped bottle frame with smooth liquid motion continuity, keeping the same lens feel and warm studio lighting.',
@@ -313,6 +316,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow1-step4',
         stepNumber: 4,
         label: 'Final still for thumbnail',
+        model: 'Sora',
         generationType: 'prompt_to_image',
         promptText: 'Editorial beauty still of the bottle standing in reflective water, warm sunrise gradient, minimal luxury composition, premium skincare ad.',
         note: 'Use the final still as the social thumbnail and landing image.',
@@ -343,6 +347,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow2-step1',
         stepNumber: 1,
         label: 'Wide hero reveal',
+        model: 'Sora',
         generationType: 'prompt_to_video',
         promptText:
           'Wide city rooftop reveal with subject centered, wind-reactive jacket movement, dramatic skyline in the distance, golden-hour contrast.',
@@ -355,6 +360,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow2-step2',
         stepNumber: 2,
         label: 'Texture detail motion',
+        model: 'Kling',
         generationType: 'image_to_video',
         promptText:
           'Animate fabric texture and logo patch with subtle camera parallax, preserving original color balance and edge details.',
@@ -368,6 +374,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow2-step3',
         stepNumber: 3,
         label: 'Pose transition',
+        model: 'Sora',
         generationType: 'frames_to_video',
         promptText:
           'Transition from relaxed standing pose to walking pose with smooth body continuity and consistent rooftop lighting.',
@@ -382,6 +389,7 @@ export const mockWorkflows: Workflow[] = [
         id: 'workflow2-step4',
         stepNumber: 4,
         label: 'Final poster still',
+        model: 'Pika',
         generationType: 'prompt_to_image',
         promptText:
           'Landscape editorial still with bold streetwear silhouette, clean sky gradient, and minimal text-safe composition.',

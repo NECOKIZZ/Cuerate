@@ -59,16 +59,19 @@ export type WorkflowGenerationType =
   | 'prompt_to_video'
   | 'image_to_video'
   | 'frames_to_video'
-  | 'prompt_to_image';
+  | 'prompt_to_image'
+  | 'ingredients';
 
 export interface WorkflowStep {
   id: string;
   stepNumber: number;
   label: string;
+  model: string;
   generationType: WorkflowGenerationType;
   promptText?: string;
   note?: string;
   inputImageUrl?: string;
+  ingredientsImageUrls?: string[];
   startFrameUrl?: string;
   endFrameUrl?: string;
   resultMediaUrl: string;
@@ -97,10 +100,12 @@ export interface Workflow {
 
 export interface WorkflowStepCreateInput {
   label: string;
+  model: string;
   generationType: WorkflowGenerationType;
   promptText?: string;
   note?: string;
   inputImageUrl?: string;
+  ingredientsImageUrls?: string[];
   startFrameUrl?: string;
   endFrameUrl?: string;
   resultMediaUrl: string;
@@ -221,7 +226,7 @@ export const availableStyleTags = [
   'neon',
 ] as const;
 
-export const availableModels = ['Sora', 'Runway', 'Kling', 'Pika', 'Hailuo', 'Other'] as const;
+export const availableModels = ['Sora', 'Runway', 'Kling', 'Pika', 'Hailuo', 'NanoBanana', 'Other'] as const;
 
 export const availableMoodLabels = [
   'Cinematic',

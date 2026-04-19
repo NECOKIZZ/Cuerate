@@ -19,6 +19,18 @@ function buildExternalUrl(rawUrl?: string) {
   return `https://${value}`;
 }
 
+function getPromptAspectRatio(prompt: { mediaWidth?: number; mediaHeight?: number; aspectRatio?: 'portrait' | 'landscape' }) {
+  if (prompt.mediaWidth && prompt.mediaHeight) {
+    return `${prompt.mediaWidth} / ${prompt.mediaHeight}`;
+  }
+
+  return prompt.aspectRatio === 'portrait' ? '9 / 16' : '16 / 9';
+}
+
+function getWorkflowAspectRatio(workflow: { mediaAspectRatio: 'portrait' | 'landscape' }) {
+  return workflow.mediaAspectRatio === 'portrait' ? '9 / 12' : '16 / 10';
+}
+
 export function UserProfile() {
   const { handle } = useParams<{ handle: string }>();
   const navigate = useNavigate();
@@ -70,8 +82,9 @@ export function UserProfile() {
     );
   }
 
-  const userPrompts = prompts.filter((prompt) => prompt.authorUid === profileUser.uid);
-  const userForks = prompts.filter((prompt) => prompt.isForked && prompt.authorUid === profileUser.uid);
+  const userAuthoredPrompts = prompts.filter((prompt) => prompt.authorUid === profileUser.uid);
+  const userPrompts = userAuthoredPrompts.filter((prompt) => !prompt.isForked);
+  const userForks = userAuthoredPrompts.filter((prompt) => prompt.isForked);
   const userWorkflows = workflows.filter((workflow) => workflow.authorUid === profileUser.uid);
   const displayName = truncateText(profileUser.displayName, 28);
   const displayHandle = truncateText(profileUser.handle, 20);
@@ -251,7 +264,8 @@ export function UserProfile() {
               userWorkflows.map((workflow) => (
                 <div
                   key={workflow.id}
-                  className="relative aspect-video rounded-[var(--cuerate-r-lg)] overflow-hidden cursor-pointer hover:opacity-85 transition-opacity"
+                  className="relative rounded-[var(--cuerate-r-lg)] overflow-hidden cursor-pointer hover:opacity-85 transition-opacity"
+                  style={{ aspectRatio: getWorkflowAspectRatio(workflow) }}
                   role="button"
                   tabIndex={0}
                   onClick={() => navigate(`/workflow/${workflow.id}`)}
@@ -270,9 +284,6 @@ export function UserProfile() {
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
-                  <div className="absolute top-2 left-2 px-2 py-1 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-[10px] text-[var(--cuerate-text-1)]">
-                    {workflow.tool}
-                  </div>
                   <div className="absolute bottom-2 left-2 right-2">
                     <p className="font-primary text-sm text-white truncate">{workflow.title}</p>
                   </div>
@@ -292,7 +303,8 @@ export function UserProfile() {
               tabContent.map((prompt) => (
                 <div
                   key={prompt.id}
-                  className="relative aspect-square rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+                  className="relative rounded-[var(--cuerate-r-md)] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+                  style={{ aspectRatio: getPromptAspectRatio(prompt) }}
                   role="button"
                   tabIndex={0}
                   onClick={() => navigate(`/prompt/${prompt.id}`)}
@@ -308,7 +320,7 @@ export function UserProfile() {
                   <img
                     src={prompt.thumbnailUrl}
                     alt={`Prompt by ${prompt.authorHandle}`}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full bg-black/20 object-contain"
                   />
                 </div>
               ))

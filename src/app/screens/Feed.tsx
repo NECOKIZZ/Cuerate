@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router';
 import { PromptCard } from '../components/PromptCard';
 import { WorkflowCard } from '../components/WorkflowCard';
 import { ForkPromptModal } from '../components/ForkPromptModal';
-import { followsApi, metaApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
+import { followsApi, metaApi, notificationsApi, promptsApi, uploadsApi, workflowsApi } from '../../lib/backend';
 import { useAuth } from '../../lib/auth-context';
 import { createVideoThumbnailFile, detectImageFileDimensions, detectVideoFileDimensions } from '../../lib/media';
 import { useBackendQuery } from '../../lib/useBackendQuery';
@@ -16,7 +16,6 @@ export function Feed() {
   const { user: activeUser, isLoading: authIsLoading } = useAuth();
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
   const [contentType, setContentType] = useState<'all' | 'image' | 'video'>('all');
-  const [hasUnreadNotifications] = useState(true);
   const [followedUsers, setFollowedUsers] = useState<Set<string>>(new Set());
   const [likedPrompts, setLikedPrompts] = useState<Set<string>>(new Set());
   const [savedPrompts, setSavedPrompts] = useState<Set<string>>(new Set());
@@ -64,6 +63,12 @@ export function Feed() {
     [],
     [activeUser?.uid],
   );
+  const { data: notifications } = useBackendQuery(
+    () => (activeUser ? notificationsApi.getNotificationsForUser(activeUser.uid) : Promise.resolve([])),
+    [],
+    [activeUser?.uid],
+  );
+  const hasUnreadNotifications = notifications.some((entry) => !entry.read);
 
   const hydratedPrompts = (() => {
     const merged = [...localCreatedPrompts, ...prompts.map((prompt) => promptOverrides[prompt.id] ?? prompt)];
@@ -615,7 +620,10 @@ export function Feed() {
                 <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[var(--cuerate-blue)] blue-glow" />
               )}
             </button>
-            <button className="p-2 sm:p-2.5 rounded-full hover:bg-[var(--cuerate-surface)] transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center">
+            <button
+              onClick={() => navigate('/settings')}
+              className="p-2 sm:p-2.5 rounded-full hover:bg-[var(--cuerate-surface)] transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
+            >
               <Settings className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--cuerate-text-1)]" />
             </button>
           </div>

@@ -2,7 +2,14 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     match /prompts/{userId}/{allPaths=**} {
-      allow read: if true;
+      allow get: if true;
+      allow list: if false;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /avatars/{userId}/{allPaths=**} {
+      allow get: if true;
+      allow list: if false;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
   }

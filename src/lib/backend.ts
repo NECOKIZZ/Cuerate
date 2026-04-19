@@ -53,6 +53,7 @@ const authListeners = new Set<(user: User | null) => void>();
 
 const COLLECTIONS = {
   users: 'users',
+  usersPrivate: 'usersPrivate',
   authLogs: 'authLogs',
   emailLookup: 'emailLookup',
   prompts: 'prompts',
@@ -65,6 +66,12 @@ const COLLECTIONS = {
   userFollows: 'userFollows',
   notifications: 'notifications',
   collections: 'collections',
+} as const;
+
+const QUERY_LIMITS = {
+  users: 300,
+  feedPrompts: 200,
+  feedWorkflows: 150,
 } as const;
 
 function normalizeEmail(email: string) {
@@ -284,12 +291,16 @@ function deserializeWorkflow(id: string, data: Record<string, unknown>): Workflo
             id: String(step.id ?? `step-${index + 1}`),
             stepNumber: Number(step.stepNumber ?? index + 1),
             label: String(step.label ?? ''),
+            model: String(step.model ?? data.tool ?? ''),
             generationType: (step.generationType as Workflow['steps'][number]['generationType']) ?? 'prompt_to_video',
-            promptText: step.promptText ? String(step.promptText) : undefined,
-            note: step.note ? String(step.note) : undefined,
-            inputImageUrl: step.inputImageUrl ? String(step.inputImageUrl) : undefined,
-            startFrameUrl: step.startFrameUrl ? String(step.startFrameUrl) : undefined,
-            endFrameUrl: step.endFrameUrl ? String(step.endFrameUrl) : undefined,
+             promptText: step.promptText ? String(step.promptText) : undefined,
+             note: step.note ? String(step.note) : undefined,
+             inputImageUrl: step.inputImageUrl ? String(step.inputImageUrl) : undefined,
+             ingredientsImageUrls: Array.isArray(step.ingredientsImageUrls)
+               ? step.ingredientsImageUrls.map(String)
+               : undefined,
+             startFrameUrl: step.startFrameUrl ? String(step.startFrameUrl) : undefined,
+             endFrameUrl: step.endFrameUrl ? String(step.endFrameUrl) : undefined,
             resultMediaUrl: String(step.resultMediaUrl ?? ''),
             resultThumbnailUrl: String(step.resultThumbnailUrl ?? ''),
             resultContentType: step.resultContentType === 'image' ? 'image' : 'video',
@@ -495,10 +506,35 @@ async function upsertUserProfile(profile: User) {
   }
 
   const firestore = requireDb();
-  await setDoc(doc(firestore, COLLECTIONS.users, profile.uid), stripUndefinedFields(profile), { merge: true });
-  if (profile.email) {
-    await upsertEmailLookup({ email: profile.email, userId: profile.uid });
+  const publicProfile = stripUndefinedFields({
+    uid: profile.uid,
+    handle: profile.handle,
+    displayName: profile.displayName,
+    avatarUrl: profile.avatarUrl,
+    bio: profile.bio,
+    links: profile.links,
+    primaryModels: profile.primaryModels,
+    followers: profile.followers,
+    following: profile.following,
+    totalCopies: profile.totalCopies,
+    totalPrompts: profile.totalPrompts,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  });
+  await setDoc(doc(firestore, COLLECTIONS.users, profile.uid), publicProfile, { merge: true });
+
+  const privateProfile = stripUndefinedFields({
+    uid: profile.uid,
+    email: profile.email,
+    emailVerified: profile.emailVerified,
+    authProvider: profile.authProvider,
+    lastLoginAt: profile.lastLoginAt,
+    updatedAt: new Date(),
+  });
+  if (Object.keys(privateProfile).length > 1) {
+    await setDoc(doc(firestore, COLLECTIONS.usersPrivate, profile.uid), privateProfile, { merge: true });
   }
+
   return profile;
 }
 
@@ -691,15 +727,9 @@ export const authApi = {
       const normalizedHandle = sanitizeHandle(input.handle || normalizedEmail.split('@')[0]);
 
       if (input.mode === 'signup') {
-        if (await emailExists(normalizedEmail)) {
-          throw new Error('Account already exists. Log in instead.');
-        }
-
         if (normalizedHandle && (await handleExists(normalizedHandle))) {
           throw new Error('Username taken. Choose another one.');
         }
-      } else if (!(await emailExists(normalizedEmail))) {
-        throw new Error('Account does not exist. Sign up first.');
       }
 
       writePendingEmailLink({
@@ -972,7 +1002,13 @@ export const usersApi = {
     }
 
     const firestore = requireDb();
-    const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.users), orderBy('followers', 'desc')));
+    const snapshot = await getDocs(
+      query(
+        collection(firestore, COLLECTIONS.users),
+        orderBy('followers', 'desc'),
+        limit(QUERY_LIMITS.users),
+      ),
+    );
     return snapshot.docs.map((entry) => deserializeUser(entry.id, entry.data() as Record<string, unknown>));
   },
 
@@ -1118,7 +1154,13 @@ export const promptsApi = {
     }
 
     const firestore = requireDb();
-    const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.prompts), orderBy('createdAt', 'desc')));
+    const snapshot = await getDocs(
+      query(
+        collection(firestore, COLLECTIONS.prompts),
+        orderBy('createdAt', 'desc'),
+        limit(QUERY_LIMITS.feedPrompts),
+      ),
+    );
     return snapshot.docs.map((entry) => deserializePrompt(entry.id, entry.data() as Record<string, unknown>));
   },
 
@@ -1543,6 +1585,11 @@ export const promptsApi = {
     };
 
     if (!firebaseEnabled) {
+      const sourcePromptInMock = mockPrompts.find((prompt) => prompt.id === sourcePrompt.id);
+      if (sourcePromptInMock) {
+        sourcePromptInMock.forks += 1;
+      }
+
       if (sourcePrompt.authorUid !== input.authorUid) {
         try {
           const actor = await getUserByUid(input.authorUid);
@@ -1599,7 +1646,13 @@ export const workflowsApi = {
     }
 
     const firestore = requireDb();
-    const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.workflows), orderBy('createdAt', 'desc')));
+    const snapshot = await getDocs(
+      query(
+        collection(firestore, COLLECTIONS.workflows),
+        orderBy('createdAt', 'desc'),
+        limit(QUERY_LIMITS.feedWorkflows),
+      ),
+    );
     return snapshot.docs.map((entry) => deserializeWorkflow(entry.id, entry.data() as Record<string, unknown>));
   },
 
@@ -1644,10 +1697,12 @@ export const workflowsApi = {
         id: `step-${index + 1}`,
         stepNumber: index + 1,
         label: step.label.trim() || `Step ${index + 1}`,
+        model: step.model.trim() || input.tool.trim(),
         generationType: step.generationType,
         promptText: step.promptText?.trim() || undefined,
         note: step.note?.trim() || undefined,
         inputImageUrl: step.inputImageUrl,
+        ingredientsImageUrls: step.ingredientsImageUrls,
         startFrameUrl: step.startFrameUrl,
         endFrameUrl: step.endFrameUrl,
         resultMediaUrl: step.resultMediaUrl,
@@ -1873,6 +1928,9 @@ export const workflowsApi = {
     for (const step of steps) {
       mediaUrls.push(
         typeof step.inputImageUrl === 'string' ? step.inputImageUrl : undefined,
+        ...(Array.isArray(step.ingredientsImageUrls)
+          ? step.ingredientsImageUrls.filter((url): url is string => typeof url === 'string')
+          : []),
         typeof step.startFrameUrl === 'string' ? step.startFrameUrl : undefined,
         typeof step.endFrameUrl === 'string' ? step.endFrameUrl : undefined,
         typeof step.resultMediaUrl === 'string' ? step.resultMediaUrl : undefined,
@@ -2023,7 +2081,7 @@ export const uploadsApi = {
       if (error) {
         if (/row-level security/i.test(error.message)) {
           throw new Error(
-            `Supabase Storage policy blocked the upload for bucket "${SUPABASE_BUCKET}". Add INSERT/SELECT policies for this bucket in Supabase Storage policies.`,
+            `Supabase Storage policy blocked the upload for bucket "${SUPABASE_BUCKET}". Add least-privilege INSERT policy for allowed paths (and avoid broad SELECT/list policies).`,
           );
         }
         console.error('Supabase upload error:', error);
@@ -2070,7 +2128,7 @@ export const uploadsApi = {
       if (error) {
         if (/row-level security/i.test(error.message)) {
           throw new Error(
-            `Supabase Storage policy blocked the upload for bucket "${SUPABASE_BUCKET}". Add INSERT/SELECT policies for this bucket in Supabase Storage policies.`,
+            `Supabase Storage policy blocked the upload for bucket "${SUPABASE_BUCKET}". Add least-privilege INSERT policy for allowed paths (and avoid broad SELECT/list policies).`,
           );
         }
         throw error;

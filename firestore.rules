@@ -9,7 +9,7 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    function isPromptLikeCounterUpdate() {
+    function isPromptLikeCounterUpdate(promptId) {
       return isSignedIn()
         && request.resource.data.authorUid == resource.data.authorUid
         && request.resource.data.authorHandle == resource.data.authorHandle
@@ -34,12 +34,20 @@ service cloud.firestore {
         && request.resource.data.mediaWidth == resource.data.mediaWidth
         && request.resource.data.mediaHeight == resource.data.mediaHeight
         && (
-          request.resource.data.likes == resource.data.likes + 1
-          || request.resource.data.likes == resource.data.likes - 1
+          (
+            request.resource.data.likes == resource.data.likes + 1
+            && !exists(/databases/$(database)/documents/promptLikes/$(promptId + "_" + request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/promptLikes/$(promptId + "_" + request.auth.uid))
+          )
+          || (
+            request.resource.data.likes == resource.data.likes - 1
+            && exists(/databases/$(database)/documents/promptLikes/$(promptId + "_" + request.auth.uid))
+            && !existsAfter(/databases/$(database)/documents/promptLikes/$(promptId + "_" + request.auth.uid))
+          )
         );
     }
 
-    function isPromptSaveCounterUpdate() {
+    function isPromptSaveCounterUpdate(promptId) {
       return isSignedIn()
         && request.resource.data.authorUid == resource.data.authorUid
         && request.resource.data.authorHandle == resource.data.authorHandle
@@ -64,12 +72,20 @@ service cloud.firestore {
         && request.resource.data.mediaWidth == resource.data.mediaWidth
         && request.resource.data.mediaHeight == resource.data.mediaHeight
         && (
-          request.resource.data.saves == resource.data.saves + 1
-          || request.resource.data.saves == resource.data.saves - 1
+          (
+            request.resource.data.saves == resource.data.saves + 1
+            && !exists(/databases/$(database)/documents/promptSaves/$(promptId + "_" + request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/promptSaves/$(promptId + "_" + request.auth.uid))
+          )
+          || (
+            request.resource.data.saves == resource.data.saves - 1
+            && exists(/databases/$(database)/documents/promptSaves/$(promptId + "_" + request.auth.uid))
+            && !existsAfter(/databases/$(database)/documents/promptSaves/$(promptId + "_" + request.auth.uid))
+          )
         );
     }
 
-    function isPromptCopyCounterUpdate() {
+    function isPromptCopyCounterUpdate(promptId) {
       return isSignedIn()
         && request.resource.data.authorUid == resource.data.authorUid
         && request.resource.data.authorHandle == resource.data.authorHandle
@@ -93,7 +109,9 @@ service cloud.firestore {
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.mediaWidth == resource.data.mediaWidth
         && request.resource.data.mediaHeight == resource.data.mediaHeight
-        && request.resource.data.copies == resource.data.copies + 1;
+        && request.resource.data.copies == resource.data.copies + 1
+        && !exists(/databases/$(database)/documents/promptCopies/$(promptId + "_" + request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/promptCopies/$(promptId + "_" + request.auth.uid));
     }
 
     function isPromptAuthor(promptId) {
@@ -101,7 +119,25 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/prompts/$(promptId)).data.authorUid == request.auth.uid;
     }
 
-    function isWorkflowCounterUpdate() {
+    function isPromptAuthorIdentitySyncUpdate(promptId) {
+      return isSignedIn()
+        && resource.data.authorUid == request.auth.uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['authorHandle', 'authorAvatar'])
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.authorHandle is string
+        && request.resource.data.authorAvatar is string;
+    }
+
+    function isPromptForkMetadataUpdate(promptId) {
+      return isSignedIn()
+        && resource.data.authorUid == request.auth.uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['isForked', 'forkedFromId', 'forkedFromAuthorHandle'])
+        && request.resource.data.isForked == true
+        && request.resource.data.forkedFromId is string
+        && request.resource.data.forkedFromAuthorHandle is string;
+    }
+
+    function isWorkflowLikeCounterUpdate(workflowId) {
       return isSignedIn()
         && request.resource.data.authorUid == resource.data.authorUid
         && request.resource.data.authorHandle == resource.data.authorHandle
@@ -116,17 +152,48 @@ service cloud.firestore {
         && request.resource.data.mediaAspectRatio == resource.data.mediaAspectRatio
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.steps == resource.data.steps
+        && request.resource.data.saves == resource.data.saves
         && (
           (
             request.resource.data.likes == resource.data.likes + 1
-            || request.resource.data.likes == resource.data.likes - 1
+            && !exists(/databases/$(database)/documents/workflowLikes/$(workflowId + "_" + request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/workflowLikes/$(workflowId + "_" + request.auth.uid))
           )
-          && request.resource.data.saves == resource.data.saves
           || (
-            request.resource.data.saves == resource.data.saves + 1
-            || request.resource.data.saves == resource.data.saves - 1
+            request.resource.data.likes == resource.data.likes - 1
+            && exists(/databases/$(database)/documents/workflowLikes/$(workflowId + "_" + request.auth.uid))
+            && !existsAfter(/databases/$(database)/documents/workflowLikes/$(workflowId + "_" + request.auth.uid))
           )
-          && request.resource.data.likes == resource.data.likes
+        );
+    }
+
+    function isWorkflowSaveCounterUpdate(workflowId) {
+      return isSignedIn()
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.authorHandle == resource.data.authorHandle
+        && request.resource.data.authorAvatar == resource.data.authorAvatar
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.tool == resource.data.tool
+        && request.resource.data.description == resource.data.description
+        && request.resource.data.coverVideoUrl == resource.data.coverVideoUrl
+        && request.resource.data.coverThumbnailUrl == resource.data.coverThumbnailUrl
+        && request.resource.data.tags == resource.data.tags
+        && request.resource.data.stepCount == resource.data.stepCount
+        && request.resource.data.mediaAspectRatio == resource.data.mediaAspectRatio
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.steps == resource.data.steps
+        && request.resource.data.likes == resource.data.likes
+        && (
+          (
+            request.resource.data.saves == resource.data.saves + 1
+            && !exists(/databases/$(database)/documents/workflowSaves/$(workflowId + "_" + request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/workflowSaves/$(workflowId + "_" + request.auth.uid))
+          )
+          || (
+            request.resource.data.saves == resource.data.saves - 1
+            && exists(/databases/$(database)/documents/workflowSaves/$(workflowId + "_" + request.auth.uid))
+            && !existsAfter(/databases/$(database)/documents/workflowSaves/$(workflowId + "_" + request.auth.uid))
+          )
         );
     }
 
@@ -135,9 +202,22 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/workflows/$(workflowId)).data.authorUid == request.auth.uid;
     }
 
+    function isWorkflowAuthorIdentitySyncUpdate(workflowId) {
+      return isSignedIn()
+        && resource.data.authorUid == request.auth.uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['authorHandle', 'authorAvatar'])
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.authorHandle is string
+        && request.resource.data.authorAvatar is string;
+    }
+
     match /users/{userId} {
       allow read: if true;
       allow create, update: if isOwner(userId);
+    }
+
+    match /usersPrivate/{userId} {
+      allow read, create, update: if isOwner(userId);
     }
 
     match /authLogs/{logId} {
@@ -148,7 +228,7 @@ service cloud.firestore {
     }
 
     match /emailLookup/{emailId} {
-      allow read: if true;
+      allow read: if false;
       allow create, update: if isSignedIn() && request.resource.data.userId == request.auth.uid;
     }
 
@@ -157,10 +237,11 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
       allow update: if isSignedIn()
         && (
-          resource.data.authorUid == request.auth.uid
-          || isPromptLikeCounterUpdate()
-          || isPromptSaveCounterUpdate()
-          || isPromptCopyCounterUpdate()
+          isPromptLikeCounterUpdate(promptId)
+          || isPromptSaveCounterUpdate(promptId)
+          || isPromptCopyCounterUpdate(promptId)
+          || isPromptAuthorIdentitySyncUpdate(promptId)
+          || isPromptForkMetadataUpdate(promptId)
         );
       allow delete: if isSignedIn() && resource.data.authorUid == request.auth.uid;
     }
@@ -170,8 +251,9 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
       allow update: if isSignedIn()
         && (
-          resource.data.authorUid == request.auth.uid
-          || isWorkflowCounterUpdate()
+          isWorkflowLikeCounterUpdate(workflowId)
+          || isWorkflowSaveCounterUpdate(workflowId)
+          || isWorkflowAuthorIdentitySyncUpdate(workflowId)
         );
       allow delete: if isSignedIn() && resource.data.authorUid == request.auth.uid;
     }
@@ -243,7 +325,30 @@ service cloud.firestore {
 
     match /notifications/{notificationId} {
       allow read, update: if isOwner(resource.data.userId);
-      allow create: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.userId is string
+        && request.resource.data.userId != request.auth.uid
+        && request.resource.data.type in ['follow', 'like', 'copy', 'fork']
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 180
+        && request.resource.data.fromHandle is string
+        && request.resource.data.fromHandle.size() > 0
+        && request.resource.data.fromHandle.size() <= 40
+        && (
+          !('fromAvatar' in request.resource.data)
+          || request.resource.data.fromAvatar is string
+        )
+        && (
+          !('promptId' in request.resource.data)
+          || request.resource.data.promptId is string
+        )
+        && (
+          !('workflowId' in request.resource.data)
+          || request.resource.data.workflowId is string
+        )
+        && request.resource.data.read == false;
     }
 
     match /collections/{collectionId} {

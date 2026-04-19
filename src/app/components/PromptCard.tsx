@@ -184,12 +184,19 @@ export function PromptCard({
       </div>
 
       {/* Fork Attribution */}
-      {prompt.isForked && prompt.forkedFromAuthorHandle && (
+      {prompt.isForked && prompt.forkedFromAuthorHandle && prompt.forkedFromId && (
         <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-[var(--cuerate-r-md)] bg-[var(--cuerate-indigo)]/10">
           <GitFork className="w-3 h-3 text-[var(--cuerate-indigo)]" />
-          <span className="font-accent text-xs text-[var(--cuerate-indigo)]" title={`@${prompt.forkedFromAuthorHandle}`}>
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
+              navigate(`/prompt/${prompt.forkedFromId}`);
+            }}
+            className="font-accent text-xs text-[var(--cuerate-indigo)] hover:underline"
+            title={`Open parent prompt from @${prompt.forkedFromAuthorHandle}`}
+          >
             Forked from @{displayForkedFromHandle}
-          </span>
+          </button>
         </div>
       )}
 
@@ -246,10 +253,6 @@ export function PromptCard({
           )}
         </div>
 
-        {/* Mood Label - BOTTOM LEFT */}
-        <div className="absolute bottom-2 sm:bottom-3 left-2 sm:left-3 px-2 sm:px-3 py-1 sm:py-1.5 rounded-[var(--cuerate-r-pill)] glass-surface font-accent text-[10px] sm:text-xs text-[var(--cuerate-text-1)] pointer-events-none">
-          {prompt.moodLabel}
-        </div>
       </div>
 
       {/* Prompt Text Box */}
