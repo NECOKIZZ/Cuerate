@@ -330,12 +330,8 @@ service cloud.firestore {
         && request.resource.data.userId is string
         && request.resource.data.userId != request.auth.uid
         && request.resource.data.type in ['follow', 'like', 'copy', 'fork']
-        && request.resource.data.message is string
-        && request.resource.data.message.size() > 0
-        && request.resource.data.message.size() <= 180
         && request.resource.data.fromHandle is string
-        && request.resource.data.fromHandle.size() > 0
-        && request.resource.data.fromHandle.size() <= 40
+        && request.resource.data.message is string
         && (
           !('fromAvatar' in request.resource.data)
           || request.resource.data.fromAvatar is string
