@@ -134,7 +134,7 @@ body {
 
 @media (min-width: 481px) and (max-width: 768px) {
   .cuerate-container {
-    max-width: 430px;
+    max-width: 100%;
     margin: 0 auto;
   }
 }

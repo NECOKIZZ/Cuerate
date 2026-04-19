@@ -166,15 +166,15 @@ export function Layout() {
         className="mobile-nav fixed bottom-4 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 rounded-[var(--cuerate-r-xl)] border border-[var(--cuerate-text-3)] bg-[var(--cuerate-surface)]/96 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.28)] md:hidden"
         style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
       >
-        <div className="px-3">
-          <div className="flex items-center justify-between h-16 px-1">
+        <div className="px-2">
+          <div className="grid h-16 grid-cols-5 items-center">
             {navItems.map(({ path, icon: Icon, label }) => {
               const active = isActive(path);
               return (
                 <button
                   key={path}
                   onClick={() => navigateWithAuth(path)}
-                  className={`flex flex-col items-center justify-center gap-1 transition-all min-w-[64px] min-h-[48px] px-2 py-1 rounded-[var(--cuerate-r-md)] ${
+                  className={`flex w-full flex-col items-center justify-center gap-1 transition-all min-h-[48px] px-1 py-1 rounded-[var(--cuerate-r-md)] ${
                     active
                       ? 'text-[var(--cuerate-indigo)] bg-[var(--cuerate-indigo)]/10'
                       : 'text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
