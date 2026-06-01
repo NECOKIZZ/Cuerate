@@ -9,6 +9,25 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAllowedUserPrivateCreate(userId) {
+      return isOwner(userId)
+        && !request.resource.data.keys().hasAny(['circle', 'wallet', 'walletId', 'walletAddress', 'walletBalance', 'tier', 'likePrice', 'totalEarned']);
+    }
+
+    function isAllowedUserPrivateUpdate(userId) {
+      return isOwner(userId)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'circle',
+          'wallet',
+          'walletId',
+          'walletAddress',
+          'walletBalance',
+          'tier',
+          'likePrice',
+          'totalEarned'
+        ]);
+    }
+
     function isPromptLikeCounterUpdate(promptId) {
       return isSignedIn()
         && request.resource.data.authorUid == resource.data.authorUid
@@ -217,7 +236,46 @@ service cloud.firestore {
     }
 
     match /usersPrivate/{userId} {
-      allow read, create, update: if isOwner(userId);
+      allow read: if isOwner(userId);
+      allow create: if isAllowedUserPrivateCreate(userId);
+      allow update: if isAllowedUserPrivateUpdate(userId);
+    }
+
+    match /walletTransfers/{transferId} {
+      allow read: if isSignedIn()
+        && (
+          resource.data.sourceUserId == request.auth.uid
+          || resource.data.destinationUserId == request.auth.uid
+        );
+      allow create, update, delete: if false;
+    }
+
+    match /paymentSessions/{sessionId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /likePayments/{paymentId} {
+      allow read: if isSignedIn()
+        && (
+          resource.data.userId == request.auth.uid
+          || resource.data.creatorId == request.auth.uid
+        );
+      allow create, update, delete: if false;
+    }
+
+    match /settlementBatches/{batchId} {
+      allow read: if false;
+      allow create, update, delete: if false;
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /circleWebhookEvents/{eventId} {
+      allow read, create, update, delete: if false;
     }
 
     match /authLogs/{logId} {

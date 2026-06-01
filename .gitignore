@@ -1,6 +1,11 @@
 .env
+.env.*
+!.env.example
+*.pem
+*-recovery-file.json
 node_modules/
 dist/
+functions/lib/
 .firebase/
 firebase-debug.log
 npm-debug.log*

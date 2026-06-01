@@ -10,6 +10,7 @@ import { createVideoThumbnailFile, detectImageFileDimensions, detectVideoFileDim
 import { useBackendQuery } from '../../lib/useBackendQuery';
 import { Prompt, Workflow } from '../../lib/types';
 import { truncateText } from '../../lib/text';
+import { walletApi } from '../../lib/wallet';
 
 export function Feed() {
   const navigate = useNavigate();
@@ -231,8 +232,8 @@ export function Feed() {
       },
     }));
 
-    void promptsApi
-      .toggleLike(promptId, viewer.uid)
+    void walletApi
+      .recordPaidLike({ kind: 'prompt', contentId: promptId })
       .then((result) => {
         setLikedPrompts((prev) => {
           const newSet = new Set(prev);
@@ -248,7 +249,7 @@ export function Feed() {
           ...prev,
           [promptId]: {
             ...(prev[promptId] ?? targetPrompt),
-            likes: result.likes,
+            likes: result.likes ?? (prev[promptId] ?? targetPrompt).likes,
           },
         }));
       })
@@ -444,8 +445,8 @@ export function Feed() {
       },
     }));
 
-    void workflowsApi
-      .toggleLike(workflowId, viewer.uid)
+    void walletApi
+      .recordPaidLike({ kind: 'workflow', contentId: workflowId })
       .then((result) => {
         setLikedWorkflows((prev) => {
           const next = new Set(prev);
@@ -461,7 +462,7 @@ export function Feed() {
           ...prev,
           [workflowId]: {
             ...(prev[workflowId] ?? targetWorkflow),
-            likes: result.likes,
+            likes: result.likes ?? (prev[workflowId] ?? targetWorkflow).likes,
           },
         }));
       })

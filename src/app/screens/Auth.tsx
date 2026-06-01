@@ -2,8 +2,23 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { Loader2, MailCheck } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
+import { walletApi } from '../../lib/wallet';
 
 type AuthMode = 'login' | 'signup';
+
+function readPendingEmailLinkMode(): AuthMode | null {
+  try {
+    const raw = window.localStorage.getItem('cuerate.auth.emailLink');
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as { mode?: AuthMode };
+    return parsed.mode === 'signup' || parsed.mode === 'login' ? parsed.mode : null;
+  } catch {
+    return null;
+  }
+}
 
 export function Auth() {
   const navigate = useNavigate();
@@ -39,11 +54,17 @@ export function Auth() {
     setError(null);
     setStatusMessage('Finishing your email link sign-in...');
 
+    const pendingMode = readPendingEmailLinkMode();
+
     void completeEmailLinkSignIn(window.location.href)
-      .then((signedInUser) => {
+      .then(async (signedInUser) => {
         if (!signedInUser) {
           setError('This sign-in link is invalid or expired. Try sending a new one.');
           return;
+        }
+        if (pendingMode === 'signup' && signedInUser.authProvider !== 'mock') {
+          setStatusMessage('Creating your Cuerate wallet...');
+          await walletApi.ensureCircleWallet();
         }
         navigate('/');
       })
@@ -209,7 +230,13 @@ export function Auth() {
               setStatusMessage(null);
               setIsGoogleSubmitting(true);
               void signInWithGoogle()
-                .then(() => navigate('/'))
+                .then(async (signedInUser) => {
+                  if (mode === 'signup' && signedInUser?.authProvider !== 'mock') {
+                    setStatusMessage('Creating your Cuerate wallet...');
+                    await walletApi.ensureCircleWallet();
+                  }
+                  navigate('/');
+                })
                 .catch((err) => setError(err instanceof Error ? err.message : 'Google sign-in failed.'))
                 .finally(() => setIsGoogleSubmitting(false));
             }}

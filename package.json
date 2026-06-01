@@ -8,6 +8,8 @@
     "dev": "vite",
     "firebase:login": "npx firebase-tools login",
     "firebase:use": "npx firebase-tools use cuerate-e31b5",
+    "functions:build": "npm --prefix functions run build",
+    "functions:deploy": "npm --prefix functions run deploy",
     "firebase:deploy-rules": "npx firebase-tools deploy --only firestore,storage",
     "firebase:emulators": "npx firebase-tools emulators:start"
   },

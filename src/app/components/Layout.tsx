@@ -1,5 +1,5 @@
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import { Home, Compass, User, Bell, Settings, Plus } from 'lucide-react';
+import { Home, Compass, User, Bell, Settings, Plus, WalletCards } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { truncateText } from '../../lib/text';
 import { notificationsApi } from '../../lib/backend';
@@ -22,6 +22,7 @@ export function Layout() {
     { path: '/', icon: Home, label: 'Feed' },
     { path: '/explore', icon: Compass, label: 'Explore' },
     { path: '/notifications', icon: Bell, label: 'Alerts' },
+    { path: '/wallet', icon: WalletCards, label: 'Wallet' },
     { path: '/profile', icon: User, label: 'Profile' },
     { path: '/settings', icon: Settings, label: 'Settings' },
   ].filter((entry) => !(isPromptDetailRoute && entry.path === '/post'));
@@ -29,6 +30,7 @@ export function Layout() {
   const desktopNavItems = [
     { path: '/', icon: Home, label: 'Feed' },
     { path: '/explore', icon: Compass, label: 'Explore' },
+    { path: '/wallet', icon: WalletCards, label: 'Wallet' },
     { path: '/profile', icon: User, label: 'Profile' },
   ];
 
@@ -40,7 +42,7 @@ export function Layout() {
   };
 
   const navigateWithAuth = (path: string) => {
-    const requiresAuth = ['/post', '/profile', '/notifications', '/settings'];
+    const requiresAuth = ['/post', '/profile', '/notifications', '/wallet', '/settings'];
     if (!user && requiresAuth.includes(path)) {
       navigate('/auth');
       return;
@@ -118,6 +120,13 @@ export function Layout() {
               </span>
             </button>
             <button
+              onClick={() => navigate('/wallet')}
+              className="w-full flex items-center gap-4 px-4 py-3 rounded-[var(--cuerate-r-md)] text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)] hover:bg-[var(--cuerate-surface)] transition-all"
+            >
+              <WalletCards className="w-6 h-6" />
+              <span className="text-base font-accent">Wallet</span>
+            </button>
+            <button
               onClick={() => navigate('/notifications')}
               className="w-full flex items-center gap-4 px-4 py-3 rounded-[var(--cuerate-r-md)] text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)] hover:bg-[var(--cuerate-surface)] transition-all relative"
             >
@@ -167,7 +176,7 @@ export function Layout() {
         style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
       >
         <div className="w-full px-2">
-          <div className="grid h-16 w-full grid-cols-5 items-center">
+          <div className="grid h-16 w-full grid-cols-6 items-center">
             {navItems.map(({ path, icon: Icon, label }) => {
               const active = isActive(path);
               return (

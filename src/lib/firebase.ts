@@ -3,6 +3,7 @@ import { Auth, connectAuthEmulator, getAuth } from 'firebase/auth';
 import { connectFirestoreEmulator, Firestore, getFirestore } from 'firebase/firestore';
 import { FirebaseStorage, getStorage } from 'firebase/storage';
 import { connectStorageEmulator } from 'firebase/storage';
+import { Functions, connectFunctionsEmulator, getFunctions } from 'firebase/functions';
 
 type FirebaseEnv = Record<string, string | undefined>;
 
@@ -48,15 +49,17 @@ export const auth: Auth | null = app ? getAuth(app) : null;
 export const db: Firestore | null = app ? getFirestore(app) : null;
 export const storage: FirebaseStorage | null =
   app && firebaseStorageConfigured ? getStorage(app) : null;
+export const functions: Functions | null = app ? getFunctions(app) : null;
 
 const useEmulators =
   Boolean(app) &&
   readBooleanEnv('VITE_USE_FIREBASE_EMULATORS');
 
-if (useEmulators && auth && db && storage) {
+if (useEmulators && auth && db && storage && functions) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);
   connectStorageEmulator(storage, '127.0.0.1', 9199);
+  connectFunctionsEmulator(functions, '127.0.0.1', 5001);
 }
 
 export default app;
