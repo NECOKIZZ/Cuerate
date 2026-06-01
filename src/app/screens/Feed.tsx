@@ -83,7 +83,8 @@ export function Feed() {
   })();
   const hydratedWorkflows = workflows.map((workflow) => workflowOverrides[workflow.id] ?? workflow);
 
-  const filters = ['All', 'Workflow', ...availableModels, ...availableStyleTags.slice(0, 4)];
+  const filters = ['All', ...availableModels, ...availableStyleTags.slice(0, 4)];
+  // GATED: 'Workflow' removed from filters for image-only phase
 
   const isFilterSelected = (filter: string) =>
     filter === 'All' ? selectedFilters.size === 0 : selectedFilters.has(filter);
@@ -659,17 +660,20 @@ export function Feed() {
           >
             All
           </button>
-          <button
-            onClick={() => setContentType('video')}
-            className={`flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 sm:py-2.5 rounded-[var(--cuerate-r-pill)] font-accent text-xs sm:text-sm font-medium transition-all ${
-              contentType === 'video'
-                ? 'bg-[var(--cuerate-blue)] text-white blue-glow'
-                : 'glass-surface text-[var(--cuerate-text-2)]'
-            }`}
-          >
-            <Video className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span className="hidden xs:inline">Videos</span>
-          </button>
+          {/* GATED: Videos filter hidden for image-only phase */}
+          {false && (
+            <button
+              onClick={() => setContentType('video')}
+              className={`flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 sm:py-2.5 rounded-[var(--cuerate-r-pill)] font-accent text-xs sm:text-sm font-medium transition-all ${
+                contentType === 'video'
+                  ? 'bg-[var(--cuerate-blue)] text-white blue-glow'
+                  : 'glass-surface text-[var(--cuerate-text-2)]'
+              }`}
+            >
+              <Video className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span className="hidden xs:inline">Videos</span>
+            </button>
+          )}
           <button
             onClick={() => setContentType('image')}
             className={`flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 sm:py-2.5 rounded-[var(--cuerate-r-pill)] font-accent text-xs sm:text-sm font-medium transition-all ${
@@ -734,19 +738,22 @@ export function Feed() {
               >
                 All
               </button>
-              <button
-                onClick={() => setContentType('video')}
-                className={`group relative p-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm font-medium transition-all ${
-                  contentType === 'video'
-                    ? 'bg-[var(--cuerate-blue)] text-white blue-glow'
-                    : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                }`}
-              >
-                <Video className="w-4 h-4" />
-                <span className="absolute left-1/2 -translate-x-1/2 -bottom-8 px-2 py-1 rounded-md bg-[var(--cuerate-bg)] border border-[var(--cuerate-text-3)] text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                  Videos
-                </span>
-              </button>
+              {/* GATED: Videos filter hidden for image-only phase */}
+              {false && (
+                <button
+                  onClick={() => setContentType('video')}
+                  className={`group relative p-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm font-medium transition-all ${
+                    contentType === 'video'
+                      ? 'bg-[var(--cuerate-blue)] text-white blue-glow'
+                      : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                  }`}
+                >
+                  <Video className="w-4 h-4" />
+                  <span className="absolute left-1/2 -translate-x-1/2 -bottom-8 px-2 py-1 rounded-md bg-[var(--cuerate-bg)] border border-[var(--cuerate-text-3)] text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    Videos
+                  </span>
+                </button>
+              )}
               <button
                 onClick={() => setContentType('image')}
                 className={`group relative p-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm font-medium transition-all ${

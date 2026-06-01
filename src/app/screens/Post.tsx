@@ -200,7 +200,10 @@ export function Post() {
       return;
     }
     if (!mediaFile) {
-      throw new Error('Please upload an image or video before publishing.');
+      throw new Error('Please upload an image before publishing.');
+    }
+    if (contentType === 'video') {
+      throw new Error('Video uploads are temporarily unavailable.');
     }
     if (contentType === 'image' && selectedModel !== IMAGE_ONLY_MODEL) {
       throw new Error('Image prompts must use NanoBanana.');
@@ -470,63 +473,69 @@ export function Post() {
       </div>
 
       <div className="px-4 md:px-8 py-6 max-w-3xl md:mx-auto space-y-6">
-        <div>
-          <div className="flex flex-wrap gap-2">
-            {(['prompt', 'workflow'] as const).map((entry) => (
-              <button
-                key={entry}
-                onClick={() => {
-                  setPostMode(entry);
-                  setPublishError(null);
-                }}
-                className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
-                  postMode === entry
-                    ? entry === 'workflow'
-                      ? 'bg-[#f5a623] text-[#1b1205] shadow-[0_0_24px_rgba(245,166,35,0.28)]'
-                      : 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-                    : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                }`}
-              >
-                {entry === 'prompt' ? 'Single Prompt' : 'Workflow'}
-              </button>
-            ))}
+        {/* GATED: workflow tab hidden for image-only phase */}
+        {false && (
+          <div>
+            <div className="flex flex-wrap gap-2">
+              {(['prompt', 'workflow'] as const).map((entry) => (
+                <button
+                  key={entry}
+                  onClick={() => {
+                    setPostMode(entry);
+                    setPublishError(null);
+                  }}
+                  className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
+                    postMode === entry
+                      ? entry === 'workflow'
+                        ? 'bg-[#f5a623] text-[#1b1205] shadow-[0_0_24px_rgba(245,166,35,0.28)]'
+                        : 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                      : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                  }`}
+                >
+                  {entry === 'prompt' ? 'Single Prompt' : 'Workflow'}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {postMode === 'prompt' ? (
           <>
-            <div>
-              <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Post Type</label>
-              <div className="flex flex-wrap gap-2">
-                {(['image', 'video'] as const).map((entry) => (
-                  <button
-                    key={entry}
-                    onClick={() => {
-                      setContentType(entry);
-                      setMediaFile(null);
-                      setSelectedModel(entry === 'image' ? IMAGE_ONLY_MODEL : '');
-                      setPublishError(null);
-                    }}
-                    className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
-                      contentType === entry
-                        ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
-                        : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
-                    }`}
-                  >
-                    {entry === 'image' ? 'Image Prompt' : 'Video Prompt'}
-                  </button>
-                ))}
+            {/* GATED: video option hidden for image-only phase */}
+            {false && (
+              <div>
+                <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">Post Type</label>
+                <div className="flex flex-wrap gap-2">
+                  {(['image', 'video'] as const).map((entry) => (
+                    <button
+                      key={entry}
+                      onClick={() => {
+                        setContentType(entry);
+                        setMediaFile(null);
+                        setSelectedModel(entry === 'image' ? IMAGE_ONLY_MODEL : '');
+                        setPublishError(null);
+                      }}
+                      className={`px-4 py-2 rounded-[var(--cuerate-r-pill)] font-accent text-sm transition-all ${
+                        contentType === entry
+                          ? 'bg-[var(--cuerate-indigo)] text-white indigo-glow'
+                          : 'glass-surface text-[var(--cuerate-text-2)] hover:text-[var(--cuerate-text-1)]'
+                      }`}
+                    >
+                      {entry === 'image' ? 'Image Prompt' : 'Video Prompt'}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             <div>
               <label className="font-accent text-sm text-[var(--cuerate-text-1)] mb-2 block">
-                {contentType === 'video' ? 'Video Upload' : 'Image Upload'}
+                Image Upload
               </label>
               <label className="border-2 border-dashed border-[var(--cuerate-indigo)]/30 rounded-[var(--cuerate-r-xl)] glass-surface p-8 flex flex-col items-center justify-center gap-3 hover:border-[var(--cuerate-indigo)]/50 transition-colors cursor-pointer">
                 <input
                   type="file"
-                  accept={contentType === 'video' ? 'video/mp4,video/quicktime,video/webm' : 'image/*'}
+                  accept="image/*"
                   className="hidden"
                   onChange={(event) => {
                     setMediaFile(event.target.files?.[0] ?? null);
@@ -535,7 +544,7 @@ export function Post() {
                 />
                 <Upload className="w-8 h-8 text-[var(--cuerate-indigo)]" />
                 <p className="font-accent text-sm text-[var(--cuerate-text-1)]">
-                  {mediaFile ? mediaFile.name : contentType === 'video' ? 'Upload Video' : 'Upload Image'}
+                  {mediaFile ? mediaFile.name : 'Upload Image'}
                 </p>
               </label>
             </div>
