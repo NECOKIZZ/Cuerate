@@ -1,27 +1,35 @@
 import { initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 import { getCircleClient } from './circle.js';
-import { assertTestnetTransfersOnly, getCircleConfig, type CircleRuntimeConfig } from './config.js';
+import {
+  assertTestnetTransfersOnly,
+  getCircleConfig,
+  getInspirePriceUsdc,
+  getOnchainConfig,
+  type CircleRuntimeConfig,
+} from './config.js';
+import {
+  parseUsdcMicros,
+  formatUsdcMicros,
+  computeAvailableBalance,
+  readCircleWallet,
+  readCircleUsdcBalance,
+  resolveUsdcTokenAddress,
+  type CuerateCircleWallet,
+} from './wallet.js';
+import { settlePayment } from './settlement.js';
+import { searchPrompts } from './search.js';
+import { registerPostOnchain, settleOnchain } from './onchain.js';
 
 initializeApp();
 
 const db = getFirestore();
 
-type CuerateCircleWallet = {
-  walletId: string;
-  walletAddress: string;
-  blockchain: string;
-  accountType: 'SCA' | 'EOA';
-  usdcBalance: string;
-  lockedBalance: string;
-  balanceUpdatedAt?: unknown;
-};
-
 type PaidLikeKind = 'prompt' | 'workflow';
 
-const USDC_MICROS = 1_000_000;
 const TIER_ONE_LIKE_MICROS = 1_000;
 const TIER_TWO_LIKE_MICROS = 10_000;
 
@@ -44,27 +52,6 @@ function assertValidAmount(value: unknown) {
     throw new HttpsError('invalid-argument', 'Amount must be greater than 0 and no more than 100 USDC.');
   }
   return amount;
-}
-
-function parseUsdcMicros(value: unknown) {
-  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '0';
-  if (!/^\d+(\.\d{1,6})?$/.test(raw)) {
-    return 0;
-  }
-
-  const [whole, fraction = ''] = raw.split('.');
-  return Number(whole) * USDC_MICROS + Number(fraction.padEnd(6, '0').slice(0, 6));
-}
-
-function formatUsdcMicros(micros: number) {
-  const safeMicros = Math.max(0, Math.round(micros));
-  const whole = Math.floor(safeMicros / USDC_MICROS);
-  const fraction = String(safeMicros % USDC_MICROS).padStart(6, '0').replace(/0+$/, '');
-  return fraction ? `${whole}.${fraction}` : String(whole);
-}
-
-function computeAvailableBalance(input: { usdcBalance: string; lockedBalance: string }) {
-  return formatUsdcMicros(parseUsdcMicros(input.usdcBalance) - parseUsdcMicros(input.lockedBalance));
 }
 
 function getLikePriceMicros(tier: unknown) {
@@ -103,61 +90,6 @@ function getSessionId(userId: string, providedSessionId: unknown) {
 
   const tenMinuteBucket = Math.floor(Date.now() / 600_000);
   return `${userId}_${tenMinuteBucket}`;
-}
-
-async function readCircleWallet(uid: string): Promise<CuerateCircleWallet | null> {
-  const snapshot = await db.collection('usersPrivate').doc(uid).get();
-  const circle = snapshot.data()?.circle as
-    | Partial<CuerateCircleWallet>
-    | undefined;
-
-  if (!circle?.walletId || !circle.walletAddress) {
-    return null;
-  }
-
-  return {
-    walletId: circle.walletId,
-    walletAddress: circle.walletAddress,
-    blockchain: circle.blockchain || getCircleConfig().blockchain,
-    accountType: circle.accountType || getCircleConfig().accountType,
-    usdcBalance: typeof circle.usdcBalance === 'string' ? circle.usdcBalance : '0',
-    lockedBalance: typeof circle.lockedBalance === 'string' ? circle.lockedBalance : '0',
-    balanceUpdatedAt: circle.balanceUpdatedAt,
-  };
-}
-
-async function readCircleUsdcBalance(walletId: string) {
-  const circle = getCircleClient();
-  const balanceResponse = await circle.getWalletTokenBalance({ id: walletId });
-  const tokenBalances = (balanceResponse.data?.tokenBalances ?? []) as any[];
-  const usdcBalance = tokenBalances.find((entry: any) => {
-    const symbol = String(entry.token?.symbol ?? entry.symbol ?? '').toUpperCase();
-    return symbol === 'USDC';
-  });
-
-  return {
-    usdcBalance: String(usdcBalance?.amount ?? usdcBalance?.balance ?? '0'),
-    tokenBalances,
-  };
-}
-
-async function resolveUsdcTokenAddress(walletId: string, configuredAddress?: string) {
-  if (configuredAddress) {
-    return configuredAddress;
-  }
-
-  const { tokenBalances } = await readCircleUsdcBalance(walletId);
-  const usdcBalance = tokenBalances.find((entry: any) => {
-    const symbol = String(entry.token?.symbol ?? entry.symbol ?? '').toUpperCase();
-    return symbol === 'USDC';
-  });
-
-  const tokenAddress = usdcBalance?.token?.tokenAddress ?? usdcBalance?.tokenAddress;
-  if (!tokenAddress) {
-    throw new HttpsError('failed-precondition', 'Could not find USDC token address for this wallet.');
-  }
-
-  return String(tokenAddress);
 }
 
 export const ensureCircleWallet = onCall(async (request) => {
@@ -889,4 +821,272 @@ export const circleWebhook = onRequest(async (request, response) => {
   }
 
   response.status(204).send();
+});
+
+/**
+ * Resolve an Inspiration API agent key to the Cuerate uid whose funded Circle wallet
+ * pays for the query. Env map (INSPIRE_AGENT_KEYS="key:uid,key2:uid2") takes precedence;
+ * falls back to an admin-only `agentKeys/{key}` doc. Returns null if the key is unknown.
+ */
+async function resolveAgentUid(agentKey: string): Promise<string | null> {
+  const envMap = process.env.INSPIRE_AGENT_KEYS?.trim();
+  if (envMap) {
+    for (const pair of envMap.split(',')) {
+      const [key, uid] = pair.split(':').map((part) => part.trim());
+      if (key && uid && key === agentKey) {
+        return uid;
+      }
+    }
+  }
+
+  const snapshot = await db.collection('agentKeys').doc(agentKey).get();
+  if (snapshot.exists) {
+    const uid = String(snapshot.data()?.uid ?? '');
+    return uid || null;
+  }
+
+  return null;
+}
+
+/**
+ * Resolve an agent key to the paying wallet. For the demo, a single env-defined agent wallet
+ * (INSPIRE_AGENT_KEY + INSPIRE_AGENT_WALLET_ID/ADDRESS) lets you test with no Firestore user.
+ * Otherwise the key maps to a Cuerate uid whose Circle wallet pays.
+ */
+async function resolveAgentWallet(agentKey: string): Promise<CuerateCircleWallet | null> {
+  const demoKey = process.env.INSPIRE_AGENT_KEY?.trim();
+  const demoWalletId = process.env.INSPIRE_AGENT_WALLET_ID?.trim();
+  const demoWalletAddress = process.env.INSPIRE_AGENT_WALLET_ADDRESS?.trim();
+  if (demoKey && agentKey === demoKey && demoWalletId && demoWalletAddress) {
+    const config = getCircleConfig();
+    return {
+      walletId: demoWalletId,
+      walletAddress: demoWalletAddress,
+      blockchain: config.blockchain,
+      accountType: config.accountType,
+      usdcBalance: '0',
+      lockedBalance: '0',
+    };
+  }
+
+  const uid = await resolveAgentUid(agentKey);
+  if (!uid) {
+    return null;
+  }
+  return readCircleWallet(uid);
+}
+
+/**
+ * Inspiration API — "Pinterest for Agents". An external agent pays per query (Circle-settled
+ * HTTP 402) to search Cuerate's prompt library; the matched creator AND their fork lineage get
+ * paid automatically via settlePayment. Sourcing the payment from the agent's own Circle wallet
+ * keeps the whole flow on the working dev-controlled-wallet rail (Arc testnet).
+ */
+export const inspire = onRequest({ cors: true, timeoutSeconds: 300 }, async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method Not Allowed. POST a JSON body { query }.' });
+    return;
+  }
+
+  const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+  if (!query) {
+    res.status(400).json({ error: 'Provide a "query" string, e.g. "cinematic neon city night".' });
+    return;
+  }
+
+  const priceUsdc = getInspirePriceUsdc();
+  const priceMicros = parseUsdcMicros(priceUsdc);
+  const agentKey = req.header('x-agent-key')?.trim() ?? '';
+
+  // x402-style challenge: no payment authorization yet → 402 with the payment requirements.
+  if (!agentKey) {
+    const config = getCircleConfig();
+    const payTo = process.env.PLATFORM_CIRCLE_WALLET_ADDRESS?.trim() ?? null;
+    res
+      .status(402)
+      .set('WWW-Authenticate', `x402 network="${config.blockchain}", asset="USDC", amount="${priceUsdc}"`)
+      .json({
+        error: 'Payment Required',
+        accepts: [
+          {
+            scheme: 'circle-settled',
+            network: config.blockchain,
+            asset: 'USDC',
+            amount: priceUsdc,
+            payTo,
+            resource: '/inspire',
+            description: 'Pay per query via your Cuerate agent wallet (send your key as the x-agent-key header).',
+          },
+        ],
+      });
+    return;
+  }
+
+  try {
+    const config = getCircleConfig();
+    assertTestnetTransfersOnly(config);
+
+    const agentWallet = await resolveAgentWallet(agentKey);
+    if (!agentWallet) {
+      res.status(401).json({ error: 'Unknown or unprovisioned agent key.' });
+      return;
+    }
+
+    // Verify the agent can actually cover the fee before doing any work.
+    let availableMicros = 0;
+    try {
+      const { usdcBalance } = await readCircleUsdcBalance(agentWallet.walletId);
+      availableMicros = parseUsdcMicros(usdcBalance) - parseUsdcMicros(agentWallet.lockedBalance);
+    } catch (balanceError) {
+      logger.error('inspire balance read failed', {
+        walletId: agentWallet.walletId,
+        error: balanceError instanceof Error ? balanceError.message : String(balanceError),
+      });
+      res.status(502).json({ error: 'Could not verify agent wallet balance.' });
+      return;
+    }
+
+    if (availableMicros < priceMicros) {
+      res.status(402).json({
+        error: 'Insufficient USDC in agent wallet.',
+        required: priceUsdc,
+        available: formatUsdcMicros(availableMicros),
+      });
+      return;
+    }
+
+    const match = await searchPrompts(query);
+    if (!match) {
+      res.status(404).json({ error: 'No matching prompt found for that query.' });
+      return;
+    }
+
+    // Pay the matched creator + their fork lineage from the agent's wallet.
+    // On-chain (Stage 2): the agent approves + calls the royalty contract, which splits in Solidity.
+    // Off-chain (Stage 1, fallback): we compute the split and loop Circle transfers.
+    const agentPayer = {
+      walletId: agentWallet.walletId,
+      walletAddress: agentWallet.walletAddress,
+      blockchain: agentWallet.blockchain,
+    };
+
+    let mode: 'onchain' | 'offchain';
+    let batchId: string;
+    let txIds: string[];
+    let lineagePayout: Array<{
+      recipient: string;
+      generation: number;
+      amount: string;
+      status?: string;
+      txId?: string | null;
+    }>;
+
+    if (getOnchainConfig().enabled) {
+      const result = await settleOnchain(match.id, priceMicros, agentPayer);
+      mode = 'onchain';
+      batchId = result.batchId;
+      txIds = result.txIds;
+      lineagePayout = result.payouts.map((p) => ({
+        recipient: p.uid,
+        generation: p.generation,
+        amount: p.amount,
+      }));
+    } else {
+      const settlement = await settlePayment(match.id, priceMicros, agentPayer, 'inspire');
+      mode = 'offchain';
+      batchId = settlement.batchId;
+      txIds = settlement.txIds;
+      lineagePayout = settlement.payouts.map((p) => ({
+        recipient: p.uid,
+        generation: p.generation,
+        amount: p.amount,
+        status: p.status,
+        txId: p.txId,
+      }));
+    }
+
+    // Side-effect like (no extra charge): agent demand shows up as real engagement,
+    // feeding the existing tier/leaderboard system with zero UI work.
+    try {
+      await db.collection('prompts').doc(match.id).update({ likes: FieldValue.increment(1) });
+    } catch (likeError) {
+      logger.warn('inspire like increment failed', {
+        promptId: match.id,
+        error: likeError instanceof Error ? likeError.message : String(likeError),
+      });
+    }
+
+    res.status(200).json({
+      prompt: match.promptText,
+      model: match.model,
+      thumbnailUrl: match.thumbnailUrl,
+      styleTags: match.styleTags,
+      moodLabel: match.moodLabel,
+      source: {
+        promptId: match.id,
+        creatorHandle: match.authorHandle,
+      },
+      payment: {
+        amount: priceUsdc,
+        currency: 'USDC',
+        network: config.blockchain,
+        mode,
+        batchId,
+        lineagePayout,
+        txIds,
+      },
+    });
+  } catch (err) {
+    logger.error('inspire fatal error', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Inspiration query failed.' });
+  }
+});
+
+/**
+ * When a prompt (or fork) is created, register it in the on-chain fork registry so its lineage is
+ * trustless and walkable by the royalty contract. Only active when the on-chain path is enabled.
+ * Degrades gracefully: creators without a wallet are skipped (the contract folds unregistered
+ * ancestors into the platform cut at settle time).
+ */
+export const onPromptCreated = onDocumentCreated('prompts/{promptId}', async (event) => {
+  if (!getOnchainConfig().enabled) {
+    return;
+  }
+
+  const snapshot = event.data;
+  if (!snapshot) {
+    return;
+  }
+
+  const data = snapshot.data() ?? {};
+  const promptId = event.params.promptId;
+  const authorUid = String(data.authorUid ?? '');
+  const parentPromptId = data.forkedFromId ? String(data.forkedFromId) : null;
+
+  if (!authorUid) {
+    return;
+  }
+
+  const wallet = await readCircleWallet(authorUid);
+  if (!wallet) {
+    logger.info('onPromptCreated: creator has no wallet yet, skipping on-chain registration', {
+      promptId,
+      authorUid,
+    });
+    return;
+  }
+
+  try {
+    const txId = await registerPostOnchain(promptId, wallet.walletAddress, parentPromptId);
+    logger.info('onPromptCreated: registered post on-chain', { promptId, parentPromptId, txId });
+  } catch (err) {
+    // A revert here usually means the post is already registered — safe to ignore.
+    logger.warn('onPromptCreated: on-chain registration failed (may already exist)', {
+      promptId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 });

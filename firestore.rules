@@ -278,6 +278,11 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    // Inspiration API agent keys: server-only (admin SDK bypasses these rules).
+    match /agentKeys/{agentKey} {
+      allow read, create, update, delete: if false;
+    }
+
     match /authLogs/{logId} {
       allow create: if 
         (isSignedIn() && request.resource.data.userId == request.auth.uid) ||

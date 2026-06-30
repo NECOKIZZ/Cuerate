@@ -12,14 +12,21 @@
     "circle:register-entity-secret": "node --env-file=.env scripts/register-entity-secret.mjs",
     "circle:entity-secret-ciphertext": "node --env-file=.env scripts/entity-secret-ciphertext.mjs",
     "circle:create-wallet-set": "node --env-file=.env scripts/create-wallet-set.mjs",
+    "circle:create-platform-wallet": "node --env-file=.env scripts/create-platform-wallet.mjs",
+    "deploy:contract": "node --env-file=.env scripts/deploy-contract.mjs",
+    "circle:create-agent-wallet": "node --env-file=.env scripts/create-agent-wallet.mjs",
+    "inspire:demo": "node --env-file=.env scripts/agent-inspire-demo.mjs",
+    "test:shares": "npm run build && node scripts/test-shares.mjs",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "npm run build && firebase deploy --only functions",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^8.0.0",
+    "@circle-fin/smart-contract-platform": "^10.6.0",
     "firebase-admin": "^13.0.0",
-    "firebase-functions": "^6.0.1"
+    "firebase-functions": "^6.0.1",
+    "viem": "^2.53.1"
   },
   "devDependencies": {
     "typescript": "^6.0.2"
